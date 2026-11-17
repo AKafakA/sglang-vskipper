@@ -1,0 +1,36 @@
+{
+ "_comment": "What the FlashInfer-arm pair EXECUTES differently on the Vast 4x A100-SXM4-80GB node (owner 2026-10-26, rebuttal question 'if support flash attention is possible', option 1: FlashInfer, prefill routing only), declared BEFORE any cell (incident-graph-ladder-confound-20260916, rule 1). Both arms run launch profile paper_flashinfer (fp16, mem 0.8) on SGLang's own substrate: no backend flag, FlashInfer available, so attention and sampling resolve to the card's defaults (FlashInfer) on both -- equal across arms, so nothing to declare for them. The decode-graph range is the paper's: the fork captures 4x max_bs = 1024 and upstream gets --cuda-graph-max-bs 1024 (the paper's upstream_g1024 control).",
+ "fields_compared": [
+  "decode_ladder_top",
+  "decode_ladder_buckets",
+  "decode_ladder_bs",
+  "decode_graph_backend",
+  "decode_tc_compiler",
+  "prefill_graph_backend",
+  "prefill_graph_bs",
+  "kv_capacity_tokens",
+  "chunked_prefill_size",
+  "mem_fraction_static",
+  "dtype",
+  "attention_backend",
+  "sampling_backend",
+  "decode_kv_band"
+ ],
+ "tolerances": {
+  "kv_capacity_tokens_rel": 0.015,
+  "kv_capacity_tokens_abs": 3856,
+  "_note": "rel 0.015 as the paper's A100-80GB declaration (the router/projector weights displace ~3,840 K/V tokens = 0.98 % of a ~393k pool); abs 3856 = 3,840 + 16 for SGLang's boot-to-boot pool jitter (measured 2026-10-25). A smaller treatment pool only ever costs the treatment."
+ },
+ "declared": {
+  "upstream_fi_g1024": {
+   "decode_ladder_top": 1024,
+   "reason": "same-ladder control on the FlashInfer substrate: upstream + --cuda-graph-max-bs 1024 = the fork's 4x max_bs ladder (the paper's upstream_g1024)"
+  },
+  "vskipper_fi": {
+   "decode_ladder_top": 1024,
+   "kv_capacity_tokens": "smaller_ok",
+   "decode_kv_band": "rule",
+   "reason": "the served prefill routing and admission pinning on FlashInfer with every request decoding on the dense body (arm vskipper_fi: phases prefill, decode_after_fd_prefill stock, no promotion, masked decode attention off -- FlashInfer has no row-gated decode kernel); decode runs SGLang's own full decode graph over the dense body, captured to the coverage ladder 1024 (4x max_bs, attested in vp_runtime.fd_c3.ladder); its attested band is the rule's for the A100 (unused: no decode leg, as the P/D prefill instances); router/projector weights shrink the pool by <1.5 %"
+  }
+ }
+}

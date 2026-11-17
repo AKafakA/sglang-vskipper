@@ -59,6 +59,7 @@ from sglang.srt.utils import (
 )
 from sglang.srt.utils.common import ceil_align, is_pin_memory_available
 from vskipper.runtime.config import (
+    full_graph_policy_prompt_lens_required,
     full_graph_request_identity_required,
 )
 
@@ -77,6 +78,7 @@ _skip_attn_backend_init_warned = False
 
 _is_npu = is_npu()
 _VP_REQUEST_IDENTITY_REQUIRED = full_graph_request_identity_required()
+_VP_PROMPT_LENS_REQUIRED = full_graph_policy_prompt_lens_required()
 
 
 class ForwardMode(IntEnum):
@@ -445,6 +447,8 @@ class ForwardBatch(ForwardBatchDeepSeekMHAMixin):
     # MIXED decode step, forced to RUN in the routed body (one replay per step).
     # Set by the model runner per pass; a static replay buffer under the graph.
     fd_full_graph_force_run_rows: Optional[torch.Tensor] = None
+    # Each row's prompt length, only for a policy that reads it (D³).
+    fd_full_graph_prompt_lens: Optional[torch.Tensor] = None
     fd_full_graph_compact_phase_enabled: bool = False
     # [W1] Regime switch, decode leg (I6b): the decode cuda-graph backend stamps
     # this True on the dummies ForwardBatch it captures for a "prod_allrun" low
@@ -825,6 +829,13 @@ class ForwardBatch(ForwardBatchDeepSeekMHAMixin):
                     "[D-849] an extend/mixed-chunk batch carries requests pinned "
                     "to both bodies; admission rounds must be pin-uniform"
                 )
+
+        if _VP_PROMPT_LENS_REQUIRED:
+            ret.fd_full_graph_prompt_lens = torch.tensor(
+                [len(req.origin_input_ids) for req in batch.reqs],
+                dtype=torch.int64,
+                device=device,
+            )
 
         kv_canary_ids = envs.SGLANG_KV_CANARY_ENABLE_TOKEN_ORACLE.get()
         if kv_canary_ids or _VP_REQUEST_IDENTITY_REQUIRED:

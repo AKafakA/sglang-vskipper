@@ -20,6 +20,15 @@ import types
 import pytest
 import torch
 
+
+@pytest.fixture(autouse=True)
+def _single_rank(monkeypatch):
+    """The routed bodies sum shard outputs over the TP group (mlp._tp_reduce). These single-process tests
+    run at TP1 without a distributed group, so the world size is 1."""
+    from vskipper.kernels import mlp
+
+    monkeypatch.setattr(mlp, "_tp_world_size", lambda: 1)
+
 pytestmark = pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
 
 SHAPES = {"llama3_8b": (4096, 14336, 896), "qwen3_4b": (2560, 9728, 608)}

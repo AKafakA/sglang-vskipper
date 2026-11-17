@@ -121,7 +121,8 @@ def get_batch_sizes_to_capture(
                 import torch as _torch  # the module itself does not import torch
 
                 bound = vp_decode_coverage_device_bound(
-                    _torch.cuda.get_device_name(model_runner.gpu_id)
+                    _torch.cuda.get_device_name(model_runner.gpu_id),
+                    model_runner.tp_size,
                 )
             if bound is None:
                 bound = 4 * int(configured_max)

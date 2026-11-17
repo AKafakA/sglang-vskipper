@@ -592,7 +592,7 @@ def canonical_device_key(device_name: str) -> str:
 
 
 @functools.cache
-def load_tuned_configs(device_name: str) -> dict:
+def load_tuned_configs(device_name: str, tp_size: int = 1) -> dict:
     """Load the committed per-device config artifact; fail closed.
 
     Artifacts live beside this module (binary_cohort_configs/<device>.json,
@@ -601,20 +601,23 @@ def load_tuned_configs(device_name: str) -> dict:
     heuristic fallback (design v2.1 attestation contract).
 
     The lookup key is the CANONICAL device name -- see `canonical_device_key`.
+    Under tensor parallelism the GEMMs run on weight shards, whose tiles are
+    tuned separately: binary_cohort_configs/tp<N>/<device>.json.
     """
 
     import json
     from pathlib import Path
 
     key = canonical_device_key(device_name)
-    path = Path(__file__).parent / "binary_cohort_configs" / f"{key}.json"
+    root = Path(__file__).parent / "binary_cohort_configs"
+    if tp_size != 1:
+        root = root / f"tp{tp_size}"
+    path = root / f"{key}.json"
     if not path.exists():
-        available = sorted(
-            p.stem for p in (Path(__file__).parent / "binary_cohort_configs").glob("*.json")
-        )
+        available = sorted(p.stem for p in root.glob("*.json"))
         raise RuntimeError(
             f"binary_cohort tuned-config artifact missing for device "
-            f"{device_name!r} (canonical key {key!r}, expected {path}). "
+            f"{device_name!r} (canonical key {key!r}, tp {tp_size}, expected {path}). "
             f"Available: {available}"
         )
     return json.loads(path.read_text())

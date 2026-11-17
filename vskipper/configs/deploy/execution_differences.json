@@ -20,6 +20,25 @@
     "kv_capacity_tokens_rel": 0.015
   },
   "declared": {
+    "upstream_nograph": {
+      "decode_ladder_top": null,
+      "reason": "execution control (owner 2026-11-06): upstream with decode graphs off, the first-rule twin of the eager control arm"
+    },
+    "vskipper_ctrl_eager": {
+      "decode_ladder_top": null,
+      "kv_capacity_tokens": "smaller_ok",
+      "reason": "execution control (owner 2026-11-06): the simple body, no decode graphs, the router and projector weights displace K/V as on every fork arm"
+    },
+    "vskipper_fullwidth": {
+      "decode_ladder_top": 1024,
+      "kv_capacity_tokens": "smaller_ok",
+      "reason": "execution control (owner 2026-11-07): the served design with the full-width body, same ladder, same K/V rule and the same router and projector weights as vskipper",
+      "decode_kv_band": "rule"
+    },
+    "upstream_mixed": {
+      "decode_ladder_top": 1024,
+      "reason": "chunked-prefill reference (reviewer TQAB): upstream's stock --enable-mixed-chunk, same ladder as upstream_g1024"
+    },
     "upstream": {
       "decode_ladder_top": 256,
       "reason": "literal SGLang default ladder on 80 GB (T1 column)"
@@ -99,6 +118,11 @@
       "kv_capacity_tokens": "smaller_ok",
       "reason": "D-778 declared deviation: the SHARED Llama/A100 band (160k/200k) under this arm instead of the rule's own-band output (Fig. 3b fixed-band sweep / the Qwen3-4B shared-band leg); attested decode_kv_band_policy == shared [D-849, 2026-09-21: regime switch version 2 -- each request is pinned to ONE body (stock or routed) at admission from the decode band state and keeps it for prefill and every decode step; a decode step carrying both pins is partitioned into two uniform sub-passes; the radix prefix cache is namespaced by body (|vpbody=<pin> in the extra key). Bands unchanged.]",
       "decode_kv_band": "shared"
+    },
+    "vskipper_ctrl_cohort_nograph": {
+      "decode_ladder_top": null,
+      "kv_capacity_tokens": "smaller_ok",
+      "reason": "execution control (owner 2026-11-09, reviewer qN7Z): packed cohorts without decode graphs, against upstream_nograph; the router and projector weights displace K/V as on every fork arm"
     }
   },
   "fork_default": {

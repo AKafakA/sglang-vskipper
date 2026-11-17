@@ -185,7 +185,8 @@ def assert_band_follows_rule(
 #
 #     V > V* = tau * BW / (s * L_r * b)
 #
-# On the A100-80GB PCIe (BW 1935 GB/s): 2.67 ms * 1.935 TB/s / (0.5 * 16 * 4 KB) = 158k tokens.
+# On the A100 (the entry shared by both 80GB A100 parts uses the lower of their two bandwidths, 1935 GB/s;
+# 2039 GB/s on the SXM4): 2.67 ms * 1.935 TB/s / (0.5 * 16 * 4 KB) = 158k tokens.
 # The served band (exit 160k, enter 200k = 1.25 V*) was set from the two-body crossover
 # ladder (lane-2 cut1: 131k parity, 262k win) BEFORE this derivation, which reproduces it
 # without fitting. tau is D-368's one profile on the 2026-09-04 body: a cheaper body moves V*
@@ -214,6 +215,7 @@ def kv_crossover_tokens(
     skip_ratio: float = DESIGN_DECODE_SKIP_RATIO,
     routed_layers: int = 16,
     kv_bytes_per_token_layer: int = LLAMA3_8B_KV_BYTES_PER_TOKEN_LAYER,
+    kv_band_round_tokens: int = 0,      # the band's grid, read by derived_kv_band
 ) -> float:
     """V* in resident K/V tokens for this device (see the module note above)."""
     _, bw_gbs = device_peaks(device_key)
@@ -223,7 +225,7 @@ def kv_crossover_tokens(
 def derived_kv_band(device_key: str, **rule) -> tuple[int, int]:
     """Return (exit_kv_tokens, enter_kv_tokens) = (V*, 1.25 V*) on the 10k grid."""
     v = kv_crossover_tokens(device_key, **rule)
-    r = KV_BAND_ROUND_TOKENS
+    r = rule.get("kv_band_round_tokens") or KV_BAND_ROUND_TOKENS
     return int(round(v / r) * r), int(round(KV_BAND_ENTER_FACTOR * v / r) * r)
 
 
@@ -234,11 +236,18 @@ def arm_kv_rule_inputs(arm: dict) -> dict:
     from vskipper.runtime.design import SERVED_ROUTED_LAYERS
 
     routed = len(tuple(arm.get("routed_layers", SERVED_ROUTED_LAYERS)))
-    return {
+    # Tensor parallelism splits each layer's KV heads across the arm's `tp` GPUs, so a skipped
+    # row saves 1/tp of the K/V bytes on each GPU while every GPU still pays the per-step tax.
+    tp = int(arm.get("tp", 1))
+    inputs = {
         "routed_layers": routed,
         "skip_ratio": float(arm.get("design_skip_ratio", DESIGN_DECODE_SKIP_RATIO)),
-        "tau_ms": DECODE_BODY_TAX_MS * routed / 16.0,
+        "tau_ms": float(arm.get("tau_ms", DECODE_BODY_TAX_MS)) * routed / 16.0,
+        "kv_bytes_per_token_layer": int(arm.get("kv_bytes_per_token_layer", LLAMA3_8B_KV_BYTES_PER_TOKEN_LAYER)) // tp,
     }
+    if "kv_band_round_tokens" in arm:      # a crossover near 20k tokens needs a finer grid than 10k for enter to pass exit
+        inputs["kv_band_round_tokens"] = int(arm["kv_band_round_tokens"])
+    return inputs
 
 
 def assert_kv_band_follows_rule(

@@ -74,3 +74,22 @@ def test_device_ladder_table():
     assert decl["declared"]["upstream_g256"]["decode_ladder_top"] == 256
     assert decl["declared"]["vskipper"]["decode_ladder_top"] == 256
     assert decl["fork_default"]["decode_ladder_top"] == 256
+
+
+def test_device_tp_ladder_table():
+    """TP deployments: the (card, tp) table; TP1 lookups never read it, and the same-ladder baseline is declared at the same value."""
+    from vskipper.runtime.common import (
+        DECODE_COVERAGE_LADDER_BY_DEVICE_TP,
+        vp_decode_coverage_device_bound,
+    )
+
+    assert vp_decode_coverage_device_bound("NVIDIA A100-SXM4-40GB", 2) == 512
+    assert vp_decode_coverage_device_bound("NVIDIA A100-SXM4-40GB", 4) == 1024
+    assert vp_decode_coverage_device_bound("NVIDIA A100-SXM4-40GB") is None
+    assert vp_decode_coverage_device_bound("NVIDIA A100-SXM4-40GB", 8) is None
+    assert vp_decode_coverage_device_bound("NVIDIA RTX A6000", 2) is None
+    import json, pathlib
+    decl = json.loads(pathlib.Path(__file__).resolve().parents[1].joinpath("configs/deploy/execution_differences.a100_40gb_tp.json").read_text())
+    for (device, tp), ladder in DECODE_COVERAGE_LADDER_BY_DEVICE_TP.items():
+        assert decl["declared"][f"upstream_g{ladder}"]["decode_ladder_top"] == ladder
+        assert decl["declared"][f"vskipper_tp{tp}"]["decode_ladder_top"] == ladder

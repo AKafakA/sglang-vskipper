@@ -185,6 +185,21 @@ PROTOCOL_SUITE_ID = "flexidepth-lm-eval-0.4.9.1-serving-v1"
 DEFAULT_FREQUENCY_PENALTY = 0.0
 FREQUENCY_PENALTY_FIELD = "frequency_penalty"
 DATASET_PROTOCOLS: dict[str, dict[str, Any]] = {
+    # [owner 2026-11-07] The D³ paper's client: lm-eval's bbh_fewshot (no CoT) and gsm8k tasks, 3 shots, raw completion, its maximum lengths.
+    "d3_bbh": {
+        "id": "lm-eval-0.4.9.1:bbh_fewshot:3shot-raw-nocot",
+        "source": "lukaemon/bbh",
+        "evaluation_split": "test",
+        "quality_semantics": "paper_exact",
+        "task_reference_max_output_len": 200,
+    },
+    "d3_gsm8k": {
+        "id": "lm-eval-0.4.9.1:gsm8k:3shot-raw",
+        "source": "openai/gsm8k:main",
+        "evaluation_split": "test",
+        "quality_semantics": "paper_exact",
+        "task_reference_max_output_len": 1024,
+    },
     "gsm8k": {
         "id": "lm-eval-0.4.9.1:gsm8k-v3:5shot-multiturn",
         "source": "openai/gsm8k:main",

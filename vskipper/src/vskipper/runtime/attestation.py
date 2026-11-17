@@ -16,6 +16,7 @@ from vskipper.runtime.design import (  # [D-609]
     SERVED_CONDITIONAL_GRAPH,
     mechanism,
     SERVED_MASKED_DECODE_ATTENTION,
+    skipper_deployed,
 )
 
 from typing import Mapping, Sequence
@@ -394,6 +395,10 @@ def scheduler_runtime_attestation(scheduler: Any) -> dict[str, Any]:
     # production and gate-OFF boots keep a byte-identical attestation. The
     # bidirectional launch gate demands: expectation attests fd_c3.enabled
     # <=> the boot armed it.
+    if skipper_deployed() and flexidepth_execution_mode() != FD_EXECUTION_FULL_GRAPH:
+        from vskipper.runtime.eager import EAGER_DECODE_ROUTES
+
+        result["eager_decode_routes"] = dict(EAGER_DECODE_ROUTES)
     fd_c3 = coverage_dense_runtime_attestation(model_runner)
     if fd_c3 is not None:
         result["fd_c3"] = fd_c3

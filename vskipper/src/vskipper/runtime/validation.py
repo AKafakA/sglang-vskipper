@@ -8,6 +8,9 @@ rather than serve a posture nobody declared.
 from __future__ import annotations
 
 from vskipper.runtime.design import (  # [D-609]
+    SERVED_TP_SIZES,
+    active_arm,
+    arm_coverage_dense,
     conditional_graph_helper_path,
 )
 
@@ -205,6 +208,15 @@ def validate_full_graph_model_configuration(
     """Fail closed on configurations not covered by the first V3 kernel."""
 
     values = os.environ if environ is None else environ
+
+    # [owner 2026-11-09] The cohorts-without-graphs control declares uncaptured decode (arm field coverage_dense
+    # false). With decode graphs on it would serve captured cohorts plus eager overflow under the control's name,
+    # and no later gate could tell (it publishes no fd_c3 ladder), so refuse that boot here.
+    if loaded_flexidepth_layers and not arm_coverage_dense() and cuda_graph_enabled:
+        raise ValueError(
+            "the active arm declares uncaptured decode (coverage_dense false) and must boot with decode CUDA "
+            "graphs disabled (launch profile paper_nodecodegraph)"
+        )
 
     # D-250 (review finding 5): REJECT the removed layer-routed mechanism rather
     # than ignoring it. It reused the stock --prefill/--decode-attention-backend
@@ -785,10 +797,14 @@ def validate_full_graph_model_configuration(
             "codex/asplos-plan/2026-08-21-removed-feature-register.md): "
             + ", ".join(removed)
         )
-    if tp_size != 1 or pp_size != 1:
+    # Tensor parallelism (rebuttal TP feasibility): the arm declares its TP size, and the server
+    # must run exactly that size, so the thresholds the arm derives (per-GPU K/V bytes) match
+    # what executes. Pipeline parallelism stays unsupported.
+    arm_tp = int(active_arm().get("tp", 1))
+    if pp_size != 1 or tp_size not in SERVED_TP_SIZES or tp_size != arm_tp:
         raise ValueError(
-            "VP full_graph currently requires TP=1 and PP=1; "
-            f"observed TP={tp_size}, PP={pp_size}"
+            f"VP full_graph requires PP=1 and TP in {SERVED_TP_SIZES} equal to the arm's tp "
+            f"({arm_tp}); observed TP={tp_size}, PP={pp_size}"
         )
     if quant_config is not None:
         raise ValueError("VP full_graph currently requires unquantized weights")

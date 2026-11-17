@@ -69,6 +69,30 @@ def validate_v3_graph_activity(attestations: list) -> list:
         block = runtime.get("v3_full_graph")
         if not isinstance(block, dict):
             raise ValueError(f"rank {rank}: no v3_full_graph attestation block")
+        if (runtime.get("served_design") or {}).get("coverage_dense") is False:
+            # [owner 2026-11-09] The cohorts-without-graphs control declares (and attests) uncaptured decode, so the
+            # captured-step checks below cannot apply and its evidence is what it emits itself: the boot's decode
+            # backend is disabled, and the route tape counted routed rows. Its coverage stamp is off, so it carries
+            # no fd_c3 block. Only this attested declaration takes the branch.
+            if block.get("decode_backend") != "disabled":
+                raise ValueError(
+                    f"rank {rank}: decode backend {block.get('decode_backend')!r} on the arm that declares "
+                    "uncaptured decode (expected 'disabled')"
+                )
+            routes = ((runtime.get("model") or {}).get("flexidepth") or {}).get("full_graph_routes") or {}
+            if "layer_rows" not in routes:
+                raise ValueError(f"rank {rank}: no model.flexidepth.full_graph_routes.layer_rows on the uncaptured arm")
+            if int(routes["layer_rows"]) <= 0:
+                raise ValueError(f"rank {rank}: zero routed rows on the arm that declares uncaptured decode")
+            activity.append(
+                {
+                    "rank": rank,
+                    "decode_backend": "disabled",
+                    "routed_layer_rows": int(routes["layer_rows"]),
+                    "uncaptured_by_design": True,
+                }
+            )
+            continue
         counters = block.get("counters")
         if not isinstance(counters, dict) or not counters:
             raise ValueError(

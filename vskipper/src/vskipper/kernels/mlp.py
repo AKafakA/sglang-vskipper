@@ -14,6 +14,7 @@ from __future__ import annotations
 from vskipper.runtime.config import (
     full_graph_eager_semantic_debug_enabled,
 )
+import functools
 import json
 from dataclasses import dataclass, replace
 from typing import Any, Callable, Optional
@@ -31,6 +32,7 @@ from vskipper.runtime.env import (
     _BINARY_COHORT_STATS,
     _PREFILL_FALLBACK,
 )
+from vskipper.runtime.design import active_arm
 from vskipper.runtime.config import (
     full_graph_compact_config,
     full_graph_forced_all_run_fastpath_enabled,
@@ -77,7 +79,7 @@ def _direct_eager_semantic_mlp(
         output.index_copy_(
             0,
             project_rows,
-            direct_projector(hidden_states.index_select(0, project_rows))
+            _tp_reduce(direct_projector(hidden_states.index_select(0, project_rows)))
             * (1.0 - route_weights.index_select(0, project_rows)),
         )
     return output
@@ -92,6 +94,28 @@ def _gate_scaled(weights: torch.Tensor) -> torch.Tensor:
     if full_graph_gate_mode() == "released":
         return weights
     return torch.ones_like(weights)
+
+
+@functools.cache
+def _tp_world_size() -> int:
+    from sglang.srt.distributed import get_tensor_model_parallel_world_size
+
+    return int(get_tensor_model_parallel_world_size())
+
+
+def _tp_reduce(partial: torch.Tensor) -> torch.Tensor:
+    """Sum a routed-MLP partial output over the tensor-parallel ranks (identity at TP=1).
+
+    Under TP the MLP weights and the projector are sharded over the intermediate/bottleneck
+    dimension (as SGLang shards an MoE expert), so a body built from the raw weight shards
+    returns a partial sum. Bodies that call ``layer.mlp`` get the reduction from its
+    row-parallel down projection and must not be reduced again.
+    """
+    if _tp_world_size() == 1:
+        return partial
+    from sglang.srt.distributed import tensor_model_parallel_all_reduce
+
+    return tensor_model_parallel_all_reduce(partial)
 
 
 def _grouped_prefill_mlp(
@@ -132,7 +156,7 @@ def _grouped_prefill_mlp(
         output.index_copy_(0, run_rows, run_output)
     if project_rows.numel() > 0:
         project_hidden = hidden_states.index_select(0, project_rows)
-        project_output = proj(project_hidden)
+        project_output = _tp_reduce(proj(project_hidden))
         if scale_by_route_weight:
             project_weights = route_weights.index_select(0, project_rows)
             project_output.mul_(project_weights.neg().add_(1.0))
@@ -320,11 +344,15 @@ def _binary_cohort_mlp(
     out.zero_()
 
     device_name = torch.cuda.get_device_name(hidden_states.device)
-    tuned = load_tuned_configs(device_name)
-    if device_name not in _BINARY_COHORT_CONFIG_DIGEST:
+    # Under TP the GEMMs run on weight shards (N or K divided by tp), so the tiles come from
+    # the artifact tuned on those shard shapes.
+    tp = _tp_world_size()
+    tuned = load_tuned_configs(device_name, tp)
+    artifact_key = device_name if tp == 1 else f"{device_name}/tp{tp}"
+    if artifact_key not in _BINARY_COHORT_CONFIG_DIGEST:
         import hashlib
 
-        _BINARY_COHORT_CONFIG_DIGEST[device_name] = hashlib.sha256(
+        _BINARY_COHORT_CONFIG_DIGEST[artifact_key] = hashlib.sha256(
             json.dumps(tuned, sort_keys=True).encode()
         ).hexdigest()
     _BINARY_COHORT_LAYERS.add(int(getattr(layer, "layer_id", -1)))
@@ -468,13 +496,13 @@ def fd_conditional_mlp_full_graph(
         if lr_policy == "native_dense":
             run_output = layer.mlp(hidden_states) * _gate_scaled(route_weights)
         else:
-            run_output = _one_expert_mlp(
+            run_output = _tp_reduce(_one_expert_mlp(
                 hidden_states,
                 layer.mlp.gate_up_proj.weight.unsqueeze(0),
                 layer.mlp.down_proj.weight.unsqueeze(0),
                 _gate_scaled(route_weights),
                 active_rows,
-            )
+            ))
         return torch.where(active_rows, run_output, torch.zeros_like(run_output))
 
     if full_graph_eager_semantic_debug_enabled():
@@ -505,6 +533,35 @@ def fd_conditional_mlp_full_graph(
     rows = int(hidden_states.shape[0])
     low_row_policy = full_graph_low_row_policy()
     if low_row_policy == "native_dense":
+        # The served design's prefill escape reads these counts. The cohort
+        # body accumulates them in every pass, captured prefill and decode
+        # included, so this body does too, with the cohort's own launches: a
+        # capture-time guard here left captured prefill passes uncounted and
+        # the escape observed nothing (cells refused, 2026-11-07).
+        if active_arm().get("fullwidth_engagement_counts"):
+            stats = _binary_cohort_stats(hidden_states.device)
+            if route_maps is not None:
+                from vskipper.runtime.routing import accumulate_route_counts
+
+                # decode: the counts prepare already built, one launch as in the cohort body
+                accumulate_route_counts(route_maps[2], stats)
+            elif hidden_states.is_cuda:
+                from vskipper.runtime.routing import build_route_maps_from_mask
+
+                # prefill: the cohort body's one route-map launch, its maps unused here
+                build_route_maps_from_mask(
+                    run_mask.reshape(rows),
+                    None if valid_rows is None else valid_rows.reshape(rows),
+                    stats,
+                )
+            else:
+                run_flat = run_mask.reshape(rows)
+                valid_flat = (
+                    torch.ones_like(run_flat) if valid_rows is None else valid_rows.reshape(rows)
+                )
+                stats[0] += 1
+                stats[1] += (run_flat & valid_flat).sum()
+                stats[2] += (~run_flat & valid_flat).sum()
         output = _native_dense_mlp(
             layer, proj, hidden_states, route_weights, run_mask
         )
@@ -581,7 +638,7 @@ def fd_conditional_mlp_full_graph(
                 "binary_cohort conflicts with PREFILL_GROUPED_MLP — "
                 "remove one (fail-closed, v2.1 item 5)"
             )
-        return _binary_cohort_mlp(
+        return _tp_reduce(_binary_cohort_mlp(
             layer,
             proj,
             hidden_states,
@@ -590,7 +647,7 @@ def fd_conditional_mlp_full_graph(
             valid_rows,
             prefill_cublas=prefill_cublas_enabled,
             route_maps=route_maps,
-        )
+        ))
 
     if prefill_grouped_enabled:
         return _grouped_prefill_mlp(
@@ -629,7 +686,7 @@ def fd_conditional_mlp_full_graph(
     )
     # Filtered MoE output is unspecified for inactive rows. Select the active
     # branch on device instead of relying on either kernel to zero its tail.
-    return torch.where(run_mask, run_output, project_output)
+    return _tp_reduce(torch.where(run_mask, run_output, project_output))
 def _native_dense_mlp(
     layer: Any,
     proj: Any,
@@ -640,7 +697,7 @@ def _native_dense_mlp(
     """Exact fixed-shape fallback that computes both branches for every row."""
 
     run_output = layer.mlp(hidden_states)
-    project_output = proj(hidden_states)
+    project_output = _tp_reduce(proj(hidden_states))
     if full_graph_gate_mode() == "released":
         # Published FlexiDepth gate: both branches carry the router weight.
         run_output = run_output * route_weights
@@ -658,11 +715,11 @@ def _dense_filtered_project_mlp(
     """Run dense for every row and filter only the sparse PROJECT correction."""
 
     run_output = layer.mlp(hidden_states) * _gate_scaled(route_weights)
-    project_output = _one_expert_mlp(
+    project_output = _tp_reduce(_one_expert_mlp(
         hidden_states,
         proj._fused_gate_down_weight().unsqueeze(0),
         proj.up_proj.weight.unsqueeze(0),
         _gate_scaled(1.0 - route_weights),
         ~run_mask,
-    )
+    ))
     return torch.where(run_mask, run_output, project_output)

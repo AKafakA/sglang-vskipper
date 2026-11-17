@@ -253,5 +253,6 @@ _PREFILL_FALLBACK: dict[str, tuple[int, int]] = {}
 _VP_DECODE_COVERAGE: dict[str, dict] = {}
 _BINARY_COHORT_CONFIG_DIGEST: dict = {}
 DETERMINISTIC_MOCK_FULL_GRAPH_SKIPPER = "deterministic_mock"
+POSITION_DECAY_FULL_GRAPH_SKIPPER = "position_decay"
 FLEXIDEPTH_FULL_GRAPH_SKIPPER = "flexidepth"
 RUN_PROJECT_EXECUTION = "run_project"

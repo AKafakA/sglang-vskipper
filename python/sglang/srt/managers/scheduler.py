@@ -1084,9 +1084,12 @@ class Scheduler(
 
     def _vp_pin_boot_guards(self) -> None:
         """[D-849] Pinning is defined for the served configuration only: one
-        pipeline stage, no speculative decoding, no DP attention, no P/D
-        disaggregation, no hierarchical-cache storage prefetch (it builds the
-        radix key before admission, i.e. before the pin exists)."""
+        pipeline stage, no speculative decoding, no DP attention, no
+        hierarchical-cache storage prefetch (it builds the radix key before
+        admission, i.e. before the pin exists). P/D disaggregation is defined
+        (2026-10-24): the prefill instance pins the prefill body at admission as
+        the integrated server does, and the decode instance decides the decode
+        body when a request arrives (_vp_pin_decode_admission_disagg)."""
 
         args = self.server_args
         problems = []
@@ -1096,8 +1099,6 @@ class Scheduler(
             problems.append("speculative decoding")
         if args.enable_dp_attention:
             problems.append("DP attention")
-        if args.disaggregation_mode not in (None, "null", "NULL"):
-            problems.append("P/D disaggregation")
         if self.enable_hicache_storage:
             problems.append("hierarchical-cache storage")
         if problems:
@@ -1230,6 +1231,24 @@ class Scheduler(
         req.vp_decode_body = decode
         if decode != req.vp_prefill_body:
             req.vp_skip_finish_insert = True
+        req.vp_body = decode
+
+    def _vp_pin_decode_admission_disagg(self, req: Req) -> None:
+        """[P/D disaggregation] A decode instance's counterpart of
+        _vp_pin_decode_boundary: decide the arriving request's DECODE body once,
+        from this instance's band (AdmissionPinner.decode_pin_disaggregated).
+        The decode instance serves from a chunk cache (the PD hook disables its
+        radix cache), so there is no finish insert to withhold; the stock->fd
+        upgrade at band HIGH then applies in run_batch as in the integrated server."""
+
+        if not self.vp_pinner.active or self.vp_pinner.monotone:
+            return
+        if req.vp_decode_pinned:
+            req.vp_body = req.vp_decode_body  # a retracted request re-entering decode keeps its plan
+            return
+        decode = self.vp_pinner.decode_pin_disaggregated()
+        req.vp_decode_pinned = True
+        req.vp_decode_body = decode
         req.vp_body = decode
 
     def _vp_pin_witness_prefix(self, req: Req) -> None:

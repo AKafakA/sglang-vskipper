@@ -18,7 +18,7 @@ from vskipper.runtime.design import (  # [D-609] the design is code
     SERVED_MASKED_DECODE_ATTENTION, SERVED_PREFILL_GROUPED_MLP,
     SERVED_ROUTE_ACCOUNTING, SERVED_ROUTED_LAYERS, SERVED_SCHEDULER_CONVERGENCE,
     SERVED_WEIGHTED_SCATTER, SERVED_DEFER_PROJECT_KV,
-    arm_compact_enabled, arm_routed_layers, mechanism, skipper_deployed,
+    arm_compact_enabled, arm_masked_decode_attention, arm_routed_layers, mechanism, skipper_deployed,
 )
 
 from dataclasses import asdict, dataclass, field
@@ -34,6 +34,7 @@ import os
 from vskipper.runtime.env import (
     FD_LAYER_COUNTERS_ENV,
     DETERMINISTIC_MOCK_FULL_GRAPH_SKIPPER,
+    POSITION_DECAY_FULL_GRAPH_SKIPPER,
     FLEXIDEPTH_FULL_GRAPH_SKIPPER,
     DEVICE_ROUTE_DIGEST_ENV,
 )
@@ -57,6 +58,15 @@ def full_graph_policy_identity_required(
     return (
         configured_full_graph_skipper_name(environ)
         == DETERMINISTIC_MOCK_FULL_GRAPH_SKIPPER
+    )
+def full_graph_policy_prompt_lens_required(
+    environ: Optional[Mapping[str, str]] = None,
+) -> bool:
+    """Whether the selected policy reads each row's prompt length."""
+
+    return (
+        configured_full_graph_skipper_name(environ)
+        == POSITION_DECAY_FULL_GRAPH_SKIPPER
     )
 def full_graph_request_identity_required(
     environ: Optional[Mapping[str, str]] = None,
@@ -224,5 +234,5 @@ def full_graph_masked_decode_attention_enabled(
 ) -> bool:
     """Return whether Triton decode attention suppresses JUMP-row reads."""
 
-    # [D-609] design constant, not an environment read
-    return mechanism(SERVED_MASKED_DECODE_ATTENTION)
+    # [D-609] design constant (arm field ``masked_decode_attention``, default = the design), not an environment read
+    return mechanism(arm_masked_decode_attention())

@@ -138,6 +138,8 @@ def stable_server_identity(server_info: dict[str, Any]) -> dict[str, Any]:
         # manifest re-read). The admission DESIGN stays in the identity through
         # regime_switch.admission.
         runtime.pop("admission_pins", None)
+        # eager_decode_routes: the simple control arm's route counters, runtime evidence as well.
+        runtime.pop("eager_decode_routes", None)
         # binary_cohort (D-302): the REALIZED dispatch counters advance on
         # every executor call (warmup and capture included), so they cannot
         # sit in the identity hash — the manifest snapshot and the runner's

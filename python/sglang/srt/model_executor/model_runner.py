@@ -239,6 +239,7 @@ from vskipper.integration.sglang.model_runner import prepare_decode_dispatch
 from vskipper.runtime.common import (
     REQUEST_BODY_FD,
     REQUEST_BODY_STOCK,
+    VP_BODY_MIXED,
 )
 from vskipper.runtime.regime import admission_split_zero_counters
 from sglang.srt.weight_sync.tensor_bucket import (

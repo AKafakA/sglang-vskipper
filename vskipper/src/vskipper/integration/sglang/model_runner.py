@@ -35,16 +35,22 @@ def validate_attention_backends(self, logger):
     # it is backend-agnostic. Keying on SGLANG_FD_WEIGHTS alone refused a
     # supported direct_eager launch on any non-triton backend.
     from vskipper.runtime.common import flexidepth_execution_mode
+    from vskipper.runtime.config import full_graph_masked_decode_attention_enabled
     from vskipper.runtime.design import flexidepth_weights_path, skipper_deployed
     from vskipper.runtime.env import FD_EXECUTION_FULL_GRAPH
 
     # [D-734] Was keyed on SGLANG_FD_WEIGHTS, which D-609 stopped exporting -- both
     # assertions below were inert in every served cell since 2026-09-09. The design
     # (arm + host config) is the only source of "a skipper with weights is deployed".
+    # The run mask is set only for masked decode attention (runtime/executor.py: `masked_decode_attention`); without it every
+    # row attends through the resolved backend and the non-RUN rows' attention output is zeroed by the backend-agnostic
+    # multiply in runtime/attention.py. An arm that never runs masked decode (vskipper_fi, owner 2026-10-26: FlashInfer with
+    # prefill routing only) has no run-mask reader to lose, so the triton requirement keys on masked decode.
     if (
         skipper_deployed()
         and flexidepth_weights_path().strip()
         and flexidepth_execution_mode() == FD_EXECUTION_FULL_GRAPH
+        and full_graph_masked_decode_attention_enabled()
     ):
         resolved_backends = {
             "prefill": self.prefill_attention_backend_str,
@@ -98,6 +104,15 @@ def validate_attention_backends(self, logger):
                 logger.warning(
                     "decode_kv_band_policy=gate: serving band (exit=%s, enter=%s) "
                     "as a gate-only declared deviation from the roofline rule (never a paper arm)",
+                    _rs.decode.exit_kv_tokens, _rs.decode.enter_kv_tokens,
+                )
+            elif _band_policy == "pd_tuned":
+                # [rebuttal, owner 2026-10-27] A DECLARED deviation for a P/D decode instance: the paper's band
+                # placed at the decode instance's own occupancy (design.py PD_TUNED_BANDS); declared per arm in
+                # the execution-difference declaration and attested as decode_kv_band_policy.
+                logger.warning(
+                    "decode_kv_band_policy=pd_tuned: serving band (exit=%s, enter=%s) "
+                    "as a declared P/D deviation from the roofline rule",
                     _rs.decode.exit_kv_tokens, _rs.decode.enter_kv_tokens,
                 )
             elif _band_policy != "rule":
@@ -165,6 +180,10 @@ def prepare_decode_dispatch(self, forward_batch, can_run_graph):
             if runner is not None
             else pinned_body
         )
+        if band_body is None and pinned_body is not None:
+            # [owner 2026-10-26, FlashInfer arm] pinned, but the runner has no decode leg (band-free
+            # pinning, prefill-only arm): the pass executes its pin's body -- account that, not "skip"
+            band_body = pinned_body
         coverage_stamped = stamp_coverage_dense(
             forward_batch,
             runner=runner,

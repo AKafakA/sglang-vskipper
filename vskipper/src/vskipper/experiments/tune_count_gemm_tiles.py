@@ -10,7 +10,12 @@ the accumulation order is what changes numerics; BLOCK_M/N, warps and stages do 
 cuBLAS (``torch.mm`` on the packed rows) is recorded beside it as ``cublas_ms``.
 
 usage: tune_count_gemm_tiles.py --artifact vskipper/src/vskipper/kernels/binary_cohort_configs/NVIDIA_RTX_A6000.json
-       [--hidden 4096 --intermediate 14336 --bottleneck 896] [--replays 20] [--min-gain 0.03] --out <json>
+       [--hidden 4096 --intermediate 14336 --bottleneck 896] [--tp 1] [--replays 20] [--min-gain 0.03] --out <json>
+
+Tensor parallelism: ``--tp N`` tunes the per-rank shard shapes (intermediate and bottleneck
+divided by N, as the MergedColumnParallel / RowParallel shards and the sharded projector
+hold them), starting from the carried TP1 artifact; the result is served from
+``binary_cohort_configs/tp<N>/<device>.json``.
 """
 from __future__ import annotations
 
@@ -55,6 +60,7 @@ def main() -> int:
     ap.add_argument("--hidden", type=int, default=4096)
     ap.add_argument("--intermediate", type=int, default=14336)
     ap.add_argument("--bottleneck", type=int, default=896)
+    ap.add_argument("--tp", type=int, default=1, help="tune the per-rank shard shapes of a TP-N deployment")
     ap.add_argument("--replays", type=int, default=20)
     ap.add_argument("--warmups", type=int, default=3)
     ap.add_argument("--min-gain", type=float, default=0.03, help="replace only if faster by this fraction")
@@ -65,6 +71,10 @@ def main() -> int:
     limit = a.smem_limit or int(getattr(props, "shared_memory_per_block_optin", 0) or 101376)
     name = torch.cuda.get_device_name(dev)
     art = json.loads(a.artifact.read_text())
+    if a.intermediate % a.tp or a.bottleneck % a.tp:
+        raise SystemExit(f"intermediate {a.intermediate} / bottleneck {a.bottleneck} do not split over tp {a.tp}")
+    a.intermediate //= a.tp
+    a.bottleneck //= a.tp
     torch.manual_seed(0)
     cands = [(bm, bn, w, st) for bm in (32, 64, 128) for bn in (64, 128, 256) for w in (4, 8) for st in (2, 3, 4)]
     result = {}
@@ -107,6 +117,7 @@ def main() -> int:
             "cublas_ms": round(cublas_ms, 4), "best_ms": round(best[0] if keep else cur_ms, 4),
             "ratio": round((best[0] if keep else cur_ms) / cublas_ms, 3), "config": cfg,
             "tuner": f"tune_count_gemm_tiles.py on {name} ({props.multi_processor_count} SMs, smem/block {limit} B), "
+                     f"{'' if a.tp == 1 else f'TP{a.tp} shard '}K={K} N={N}, "
                      f"BLOCK_K held at {bk}, torch.equal-gated vs the carried config; {tried} candidates; "
                      f"carried {cur} {cur_ms:.3f} ms -> {cfg} {(best[0] if keep else cur_ms):.3f} ms "
                      f"({'replaced' if keep else 'kept'}, gain {gain*100:+.1f} %)",

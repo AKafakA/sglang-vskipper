@@ -14,7 +14,10 @@ from typing import Any, Callable, Optional
 from vskipper.runtime.common import (
     ADMISSION_CRITERION_MONOTONE_DECODE,
     ADMISSION_CRITERION_PHASE_STICKY,
+    ADMISSION_DECODE_AFTER_FD_PREFILL_BAND,
     ADMISSION_DECODE_AFTER_FD_PREFILL_FD,
+    ADMISSION_DECODE_AFTER_FD_PREFILL_STOCK,
+    ADMISSION_DECODE_AFTER_STOCK_PREFILL_BAND,
     ADMISSION_DECODE_AFTER_STOCK_PREFILL_STOCK,
     RegimeSwitchConfig,
     ADMISSION_DECODE_DOWNGRADE_BAND_LOW,
@@ -579,6 +582,8 @@ class AdmissionPinner:
         self._admitted = {REQUEST_BODY_STOCK: 0, REQUEST_BODY_FD: 0}
         # [phase-sticky] per-request plans decided at the prefill->decode boundary
         self._plans = {"stock_stock": 0, "stock_fd": 0, "fd_fd": 0, "fd_stock": 0}
+        # P/D disaggregation: decode bodies decided on a decode instance (the prefill body stayed on the prefill instance)
+        self._disagg_decode = {REQUEST_BODY_STOCK: 0, REQUEST_BODY_FD: 0}
         self._upgrades = 0  # [D-849 add. 12] stock->fd decode upgrades at band HIGH
         self._downgrades = 0  # [D-849 add. 35] fd->stock decode downgrades at band LOW (one switch per request)
         self._promoted = 0  # [D-849 add. 23] monotone lane: rows promoted by their first routed step
@@ -643,8 +648,8 @@ class AdmissionPinner:
 
     def decode_pin_at_boundary(self, prefill_pin: str) -> str:
         """[phase-sticky] The DECODE body of a request leaving prefill: the band
-        state now (``decode_after_fd_prefill: "band"``), or FD after an FD
-        prefill (``"fd"``). A stock prefill decodes STOCK under
+        state now (``decode_after_fd_prefill: "band"``), FD after an FD
+        prefill (``"fd"``), or STOCK after it (``"stock"``: the FlashInfer arm). A stock prefill decodes STOCK under
         ``decode_after_stock_prefill: "stock"`` (the served design, add. 28:
         routed generation over a dense-computed prompt is the checkpoint's loop
         mode) and follows the band under the legacy ``"band"``."""
@@ -663,7 +668,38 @@ class AdmissionPinner:
             and self._cfg.admission.decode_after_fd_prefill == ADMISSION_DECODE_AFTER_FD_PREFILL_FD
         ):
             return REQUEST_BODY_FD
+        if (
+            prefill_pin == REQUEST_BODY_FD
+            and self._cfg.admission.decode_after_fd_prefill == ADMISSION_DECODE_AFTER_FD_PREFILL_STOCK
+        ):
+            return REQUEST_BODY_STOCK
         return pin_from_band_state(self._hysteresis.state)
+
+    def decode_pin_disaggregated(self) -> str:
+        """[P/D disaggregation] The DECODE body of a request arriving at a decode
+        instance. Its prefill body was decided on the prefill instance and is not
+        sent across; the served design does not need it: with
+        ``decode_after_stock_prefill`` and ``decode_after_fd_prefill`` both
+        ``"band"`` the boundary decision is the band state alone, which is what
+        ``decode_pin_at_boundary`` returns for either prefill body. Any other
+        configuration depends on the prefill body and is refused."""
+
+        if not self.phase_sticky:
+            pin = self.current_pin()
+        elif (
+            self._cfg.admission.decode_after_stock_prefill == ADMISSION_DECODE_AFTER_STOCK_PREFILL_BAND
+            and self._cfg.admission.decode_after_fd_prefill == ADMISSION_DECODE_AFTER_FD_PREFILL_BAND
+        ):
+            pin = pin_from_band_state(self._hysteresis.state)
+        else:
+            raise RuntimeError(
+                "[P/D] the decode body depends on the prefill body under "
+                f"decode_after_stock_prefill={self._cfg.admission.decode_after_stock_prefill!r}, "
+                f"decode_after_fd_prefill={self._cfg.admission.decode_after_fd_prefill!r}; "
+                "a decode instance does not receive the prefill body"
+            )
+        self._disagg_decode[pin] += 1
+        return pin
 
     @property
     def prefill_tokens_uncached(self) -> bool:
@@ -754,8 +790,8 @@ class AdmissionPinner:
     def observe_decode_step(self, rows: int, kv_tokens: Optional[int]) -> None:
         """Advance the mirror by one decode step (the whole running batch)."""
 
-        if not self._active:
-            return
+        if not self._active or not self._cfg.decode.enabled:
+            return  # a band-free block without a decode leg has no band to mirror
         before = self._hysteresis.state
         after = self._hysteresis.update(int(rows), kv_tokens)
         self._steps += 1
@@ -770,7 +806,7 @@ class AdmissionPinner:
         body). Admission onto an empty batch observes the empty batch first:
         zero rows, zero resident K/V -- the level the band actually has."""
 
-        if not self._active:
+        if not self._active or not self._cfg.decode.enabled:
             return
         before = self._hysteresis.state
         after = self._hysteresis.update(0, 0)
@@ -819,6 +855,8 @@ class AdmissionPinner:
             "monotone_promoted": self._promoted,
             "prefill_demoted_rounds": self._prefill_demoted_rounds,
             "prefill_probe_rounds": self._prefill_probe_rounds,
+            "disagg_decode_stock": self._disagg_decode[REQUEST_BODY_STOCK],
+            "disagg_decode_fd": self._disagg_decode[REQUEST_BODY_FD],
         }
 
 

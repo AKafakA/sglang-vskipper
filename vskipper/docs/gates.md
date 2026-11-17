@@ -13,7 +13,7 @@ The experiment drivers and their gates live in
 | Completed-cell accounting | `gates/cell_gates.py` | Responses, arrival fidelity, routing activation and cell accounting |
 | Cross-arm configuration | `gates/verify_cross_arm_config.py` | Allowed differences between paired arms |
 | Identical work | `cross_arm_work_gate.py` | Per-request identity and identical input/output counts |
-| Numerical reproduction | Pack `verify_results.py` | All 120 frozen reference outputs |
+| Numerical reproduction | Pack `verify_results.py` | All 124 frozen reference outputs of data pack v1.8 |
 
 Run tools through `bash vskipper/scripts/run.sh experiments/TOOL.py ...` to bind
 their source paths to this checkout. Read each tool's `--help` for its input

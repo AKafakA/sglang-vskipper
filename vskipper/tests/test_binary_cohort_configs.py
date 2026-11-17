@@ -23,7 +23,9 @@ ARTIFACT_DIR = (
     / "kernels"
     / "binary_cohort_configs"
 )
-ARTIFACTS = sorted(ARTIFACT_DIR.glob("*.json"))
+# TP1 artifacts at the top level, tensor-parallel shard tunes under tp<N>/ (kernel.load_tuned_configs)
+ARTIFACTS = sorted(ARTIFACT_DIR.rglob("*.json"))
+ARTIFACT_IDS = [p.relative_to(ARTIFACT_DIR).with_suffix("").as_posix() for p in ARTIFACTS]
 REF_OP = {"projgd": "gateup", "projup": "down"}
 
 
@@ -35,7 +37,7 @@ def _bands(artifact, op):
     return sorted(int(k.split("@")[1]) for k in artifact if k.split("@")[0] == op)
 
 
-@pytest.mark.parametrize("path", ARTIFACTS, ids=[p.stem for p in ARTIFACTS])
+@pytest.mark.parametrize("path", ARTIFACTS, ids=ARTIFACT_IDS)
 def test_projector_keys_cover_every_band(path):
     art = _load(path)
     for proj_op, ref_op in REF_OP.items():
@@ -44,7 +46,7 @@ def test_projector_keys_cover_every_band(path):
         )
 
 
-@pytest.mark.parametrize("path", ARTIFACTS, ids=[p.stem for p in ARTIFACTS])
+@pytest.mark.parametrize("path", ARTIFACTS, ids=ARTIFACT_IDS)
 def test_config_records_are_five_ints(path):
     art = _load(path)
     for key, rec in art.items():
@@ -54,7 +56,7 @@ def test_config_records_are_five_ints(path):
         assert bm % 16 == 0 and bn % 16 == 0 and bk % 16 == 0, key
 
 
-@pytest.mark.parametrize("path", ARTIFACTS, ids=[p.stem for p in ARTIFACTS])
+@pytest.mark.parametrize("path", ARTIFACTS, ids=ARTIFACT_IDS)
 def test_bk_unchanged_where_bit_identity_is_claimed(path):
     art = _load(path)
     for key, rec in art.items():

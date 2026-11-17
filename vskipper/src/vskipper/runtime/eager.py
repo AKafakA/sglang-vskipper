@@ -34,11 +34,16 @@ from typing import Any
 
 import torch
 
+from vskipper.kernels.mlp import _tp_reduce  # projector shards sum over TP ranks
+
 from vskipper.runtime.coverage import (
     record_eager_skip_decode_layer_call,
 )
 
 ROUTE_THRESHOLD = 0.5
+
+# Decode rows this body routed, read by the attestation. The row gather already syncs, so counting adds no device->host work.
+EAGER_DECODE_ROUTES = {"layer_calls": 0, "run_rows": 0, "project_rows": 0}
 
 
 def fd_layer_forward_eager(
@@ -97,6 +102,10 @@ def fd_layer_forward_eager(
     out = torch.empty_like(hidden)
     run_index = run_rows.nonzero(as_tuple=True)[0]
     project_index = (~run_rows).nonzero(as_tuple=True)[0]
+    if forward_batch.forward_mode.is_decode():
+        EAGER_DECODE_ROUTES["layer_calls"] += 1
+        EAGER_DECODE_ROUTES["run_rows"] += int(run_index.numel())
+        EAGER_DECODE_ROUTES["project_rows"] += int(project_index.numel())
     if run_index.numel() > 0:
         out.index_copy_(
             0,
@@ -108,7 +117,7 @@ def fd_layer_forward_eager(
         out.index_copy_(
             0,
             project_index,
-            proj(hidden.index_select(0, project_index))
+            _tp_reduce(proj(hidden.index_select(0, project_index)))
             * (1.0 - weight.index_select(0, project_index)),
         )
     return out, residual

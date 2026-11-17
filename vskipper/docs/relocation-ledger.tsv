@@ -292,3 +292,42 @@ test/vp/f1_figure.py	vskipper/src/vskipper/analysis/f1_figure.py	required	Analys
 test/vp/gates/verify_2x2_protocol.py	vskipper/src/vskipper/experiments/gates/verify_2x2_protocol.py	retained	Campaign gate (2x2 protocol, v1.8).	
 test/vp/gate_tests/test_paired_remeasure.py	vskipper/tests/gate_tests/test_paired_remeasure.py	validation	Maintained gate test.	
 test/vp/test_admission_pinning.py	vskipper/tests/test_admission_pinning.py	validation	Maintained runtime test (per-request pinning, v1.8).	
+deploy/execution_differences.a100_40gb_tp.json	vskipper/configs/deploy/execution_differences.a100_40gb_tp.json	required	Execution-difference declaration, tensor parallelism and P/D on the A100-SXM4-40GB node (rebuttal round).	
+deploy/execution_differences.a100_80gb_pd_tp1.json	vskipper/configs/deploy/execution_differences.a100_80gb_pd_tp1.json	required	Execution-difference declaration, P/D with every instance at TP1 on the A100-SXM4-80GB node (rebuttal round).	
+python/sglang/srt/vpipe/binary_cohort_configs/tp2/NVIDIA_A100.json	vskipper/src/vskipper/kernels/binary_cohort_configs/tp2/NVIDIA_A100.json	required	Tuned shard tiles at TP2 (rebuttal round).	
+python/sglang/srt/vpipe/binary_cohort_configs/tp4/NVIDIA_A100.json	vskipper/src/vskipper/kernels/binary_cohort_configs/tp4/NVIDIA_A100.json	required	Tuned shard tiles at TP4 (rebuttal round).	
+test/vp/capacity_window.py	vskipper/src/vskipper/analysis/capacity_window.py	required	Throughput under saturation (TPS and RPS in the arrival window at 1.25 x Q*).	scripts/reproduce_analysis.sh
+test/vp/gate_tests/test_pd_roles.py	vskipper/tests/gate_tests/test_pd_roles.py	validation	Maintained gate test (P/D groups with several instances).	
+test/vp/gate_tests/test_pd_tuned.py	vskipper/tests/gate_tests/test_pd_tuned.py	validation	Maintained gate test (lower-V* P/D arms).	
+deploy/execution_differences.d3_l3.json	vskipper/configs/deploy/execution_differences.d3_l3.json	required	Execution-difference declaration, D³ on Llama-3-8B (rebuttal round 2).	
+test/vp/gate_tests/test_rebuttal_arms.py	vskipper/tests/gate_tests/test_rebuttal_arms.py	validation	Maintained gate test (rebuttal arms: execution controls, D³, launch profiles).	
+test/vp/gate_tests/test_cohort_nograph_arm.py	vskipper/tests/gate_tests/test_cohort_nograph_arm.py	validation	Maintained gate test (cohorts without decode graphs).	
+deploy/execution_differences.a100_80gb_flashinfer.json	vskipper/configs/deploy/execution_differences.a100_80gb_flashinfer.json	required	Execution-difference declaration, FlashInfer attention on both arms on the A100-SXM4-80GB node (rebuttal round 2).	
+test/vp/gate_tests/test_flashinfer_arm.py	vskipper/tests/gate_tests/test_flashinfer_arm.py	validation	Maintained gate test (FlashInfer arm).	
+test/vp/gate_tests/test_cand_arm.py	vskipper/tests/gate_tests/test_cand_arm.py	validation	Maintained gate test (post-trained checkpoint arm).	
+training/llama3-flexidepth-grpo/README.md	vskipper/training/llama3-flexidepth-grpo/README.md	required	GRPO post-training of the Llama-3-8B router and projector (revision).	
+training/llama3-flexidepth-grpo/SHA256SUMS	vskipper/training/llama3-flexidepth-grpo/SHA256SUMS	required	GRPO post-training of the Llama-3-8B router and projector (revision).	
+training/llama3-flexidepth-grpo/data/focus_loops_released_greedy.json	vskipper/training/llama3-flexidepth-grpo/data/focus_loops_released_greedy.json	required	GRPO post-training of the Llama-3-8B router and projector (revision).	
+training/llama3-flexidepth-grpo/data/gsm8k_rows.sha256	vskipper/training/llama3-flexidepth-grpo/data/gsm8k_rows.sha256	required	GRPO post-training of the Llama-3-8B router and projector (revision).	
+training/llama3-flexidepth-grpo/data/gsm8k_split_check.py	vskipper/training/llama3-flexidepth-grpo/data/gsm8k_split_check.py	required	GRPO post-training of the Llama-3-8B router and projector (revision).	
+training/llama3-flexidepth-grpo/data/pool.json	vskipper/training/llama3-flexidepth-grpo/data/pool.json	required	GRPO post-training of the Llama-3-8B router and projector (revision).	
+training/llama3-flexidepth-grpo/data/report.json	vskipper/training/llama3-flexidepth-grpo/data/report.json	required	GRPO post-training of the Llama-3-8B router and projector (revision).	
+training/llama3-flexidepth-grpo/data/source.json	vskipper/training/llama3-flexidepth-grpo/data/source.json	required	GRPO post-training of the Llama-3-8B router and projector (revision).	
+training/llama3-flexidepth-grpo/fdfix_eval.py	vskipper/training/llama3-flexidepth-grpo/fdfix_eval.py	required	GRPO post-training of the Llama-3-8B router and projector (revision).	
+training/llama3-flexidepth-grpo/fdfix_grpo.py	vskipper/training/llama3-flexidepth-grpo/fdfix_grpo.py	required	GRPO post-training of the Llama-3-8B router and projector (revision).	
+training/llama3-flexidepth-grpo/fdfix_lib.py	vskipper/training/llama3-flexidepth-grpo/fdfix_lib.py	required	GRPO post-training of the Llama-3-8B router and projector (revision).	
+training/llama3-flexidepth-grpo/run/b4_segments2.sh	vskipper/training/llama3-flexidepth-grpo/run/b4_segments2.sh	required	GRPO post-training of the Llama-3-8B router and projector (revision).	
+training/llama3-flexidepth-grpo/run/cloudlab_dev_eval.sh	vskipper/training/llama3-flexidepth-grpo/run/cloudlab_dev_eval.sh	required	GRPO post-training of the Llama-3-8B router and projector (revision).	
+training/llama3-flexidepth-grpo/run/cloudlab_fdfix_setup.sh	vskipper/training/llama3-flexidepth-grpo/run/cloudlab_fdfix_setup.sh	required	GRPO post-training of the Llama-3-8B router and projector (revision).	
+training/llama3-flexidepth-grpo/run/cloudlab_skipret_run.sh	vskipper/training/llama3-flexidepth-grpo/run/cloudlab_skipret_run.sh	required	GRPO post-training of the Llama-3-8B router and projector (revision).	
+training/llama3-flexidepth-grpo/run/fdfix-freeze.txt	vskipper/training/llama3-flexidepth-grpo/run/fdfix-freeze.txt	required	GRPO post-training of the Llama-3-8B router and projector (revision).	
+test/vp/revision/README.md	vskipper/src/vskipper/analysis/revision/README.md	required	Revision analysis script.	
+test/vp/revision/analyze_natural.py	vskipper/src/vskipper/analysis/revision/analyze_natural.py	required	Revision analysis script.	
+test/vp/revision/e3_matched_skip.py	vskipper/src/vskipper/analysis/revision/e3_matched_skip.py	required	Revision analysis script.	
+test/vp/revision/mb_metrics.py	vskipper/src/vskipper/analysis/revision/mb_metrics.py	required	Revision analysis script.	
+test/vp/revision/pd_audit.py	vskipper/src/vskipper/analysis/revision/pd_audit.py	required	Revision analysis script.	
+test/vp/revision/pen_audit.py	vskipper/src/vskipper/analysis/revision/pen_audit.py	required	Revision analysis script.	
+test/vp/revision/served_loops_skip.py	vskipper/src/vskipper/analysis/revision/served_loops_skip.py	required	Revision analysis script.	
+test/vp/revision/tps_audit.py	vskipper/src/vskipper/analysis/revision/tps_audit.py	required	Revision analysis script.	
+training/llama3-flexidepth-grpo/data/shard_oids_2ce73595.json	vskipper/training/llama3-flexidepth-grpo/data/shard_oids_2ce73595.json	required	GRPO post-training of the Llama-3-8B router and projector (revision).	
+training/llama3-flexidepth-grpo/iterations.jsonl	vskipper/training/llama3-flexidepth-grpo/iterations.jsonl	required	GRPO post-training of the Llama-3-8B router and projector (revision).	

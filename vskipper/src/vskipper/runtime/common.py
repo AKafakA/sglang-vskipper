@@ -32,6 +32,9 @@ import os
 
 from vskipper.runtime.design import (  # [D-609] the design is code
     SERVED_EXECUTION_MODE,
+    arm_coverage_dense,
+    arm_execution_mode,
+    arm_low_row_policy,
     SERVED_FUSED_PROJECT_INPUT,
     SERVED_FUSED_ROUTER_NORM,
     SERVED_GATE_MODE,
@@ -134,7 +137,11 @@ ADMISSION_CRITERION_MONOTONE_DECODE = "monotone_decode"
 # every request; FD->stock is then the second declared composition, its finished K/V never inserted).
 ADMISSION_DECODE_AFTER_FD_PREFILL_FD = "fd"
 ADMISSION_DECODE_AFTER_FD_PREFILL_BAND = "band"
-_ADMISSION_DECODE_AFTER_FD_PREFILL = frozenset({ADMISSION_DECODE_AFTER_FD_PREFILL_FD, ADMISSION_DECODE_AFTER_FD_PREFILL_BAND})
+# [owner 2026-10-26, rebuttal FlashInfer arm] an FD prefill decodes on the dense body whatever the band: the arm that serves the
+# routed prefill on a backend without the row-gated decode kernel (vskipper_fi). fd->stock is one of the three legal plans.
+ADMISSION_DECODE_AFTER_FD_PREFILL_STOCK = "stock"
+_ADMISSION_DECODE_AFTER_FD_PREFILL = frozenset({ADMISSION_DECODE_AFTER_FD_PREFILL_FD, ADMISSION_DECODE_AFTER_FD_PREFILL_BAND,
+                                                ADMISSION_DECODE_AFTER_FD_PREFILL_STOCK})
 # [D-849 add. 28] The decode body after a DENSE prefill. "stock": a dense-prefilled
 # request decodes dense for its whole life -- routed generation over a dense-
 # computed prompt is the checkpoint's loop mode (served leg on the natural gsm8k
@@ -381,7 +388,8 @@ def full_graph_low_row_policy(
     """
 
     # [D-609] "off" IS the design (D-589). The environment may not change it;
-    # an override here is what silently ran full_dual for eighteen hours.
+    # an override here is what silently ran full_dual for eighteen hours. The only
+    # other value comes from the ARM (the execution control, design.py).
     values = os.environ if environ is None else environ
     policy = str(values.get(FD_LOW_ROW_POLICY_ENV, "off")).strip().lower()
     if policy != "off" and FD_LOW_ROW_POLICY_ENV in values:
@@ -389,6 +397,7 @@ def full_graph_low_row_policy(
             f"{FD_LOW_ROW_POLICY_ENV} is not configurable (D-609): the served "
             f'design is "off". Got {policy!r}'
         )
+    policy = arm_low_row_policy()
     if policy not in _VALID_LOW_ROW_POLICIES:
         choices = ", ".join(sorted(_VALID_LOW_ROW_POLICIES))
         raise ValueError(
@@ -711,13 +720,26 @@ def vp_decode_coverage_max_bs(
 DECODE_COVERAGE_LADDER_BY_DEVICE: dict[str, int] = {
     "NVIDIA RTX A6000": 256,
 }
+# Tensor-parallel deployments, keyed by (device name, tp size): SGLang's memory-derived default
+# ladder itself depends on the TP size (on the A100-SXM4-40GB: 32 rows at TP2, 160 at TP4), and
+# so does the served occupancy. Same rule as the table above: the entry is sized to the observed
+# occupancy, and the same-ladder baseline runs upstream with --cuda-graph-max-bs at that value.
+# A100-SXM4-40GB (2026-10-24 ladders): upstream's running batch saturates, K/V-pool-limited, at ~270 rows at TP2 and ~620 at
+# TP4 around the knee; covered by 512 and 1,024 (the power-of-two cover, as 188 -> 256 on the A6000).
+DECODE_COVERAGE_LADDER_BY_DEVICE_TP: dict[tuple[str, int], int] = {
+    ("NVIDIA A100-SXM4-40GB", 2): 512,
+    ("NVIDIA A100-SXM4-40GB", 4): 1024,
+}
 
 
-def vp_decode_coverage_device_bound(device_name: str) -> Optional[int]:
+def vp_decode_coverage_device_bound(device_name: str, tp_size: int = 1) -> Optional[int]:
     """The per-device coverage ladder for ``device_name`` (torch's device name,
-    e.g. ``torch.cuda.get_device_name(gpu_id)``), or None for the 4x rule."""
+    e.g. ``torch.cuda.get_device_name(gpu_id)``) at ``tp_size``, or None for the 4x rule."""
 
-    return DECODE_COVERAGE_LADDER_BY_DEVICE.get(str(device_name).strip())
+    name = str(device_name).strip()
+    if tp_size != 1:
+        return DECODE_COVERAGE_LADDER_BY_DEVICE_TP.get((name, int(tp_size)))
+    return DECODE_COVERAGE_LADDER_BY_DEVICE.get(name)
 
 
 def coverage_capture_bs(
@@ -946,7 +968,7 @@ def flexidepth_execution_mode(
     # [D-609] The design applies to arms that SERVE A SKIPPER. The stock arm serves
     # none, so it must not demand the full-graph body (which requires weights). The
     # ARM decides whether the mechanism runs at all; the design decides how it runs.
-    mode = SERVED_EXECUTION_MODE if skipper_deployed() else FD_EXECUTION_DIRECT_EAGER
+    mode = arm_execution_mode() if skipper_deployed() else FD_EXECUTION_DIRECT_EAGER
     if mode not in _VALID_EXECUTION_MODES:
         choices = ", ".join(sorted(_VALID_EXECUTION_MODES))
         raise ValueError(
@@ -1218,6 +1240,21 @@ class RegimeSwitchAdmissionConfig(
                 f"got decode_upgrade {self.decode_upgrade!r}"
             )
 
+    @property
+    def band_free(self) -> bool:
+        """[owner 2026-10-26, FlashInfer arm] The pins never read the decode band: the prefill body comes from the
+        round's token bracket (phase-sticky) and every request decodes STOCK whatever its prefill body, with no
+        promotion or demotion. Such an admission block needs no decode leg (an arm that routes prefill only can pin);
+        every other block reads the band and still requires one."""
+
+        return (
+            self.criterion == ADMISSION_CRITERION_PHASE_STICKY
+            and self.decode_after_fd_prefill == ADMISSION_DECODE_AFTER_FD_PREFILL_STOCK
+            and self.decode_after_stock_prefill == ADMISSION_DECODE_AFTER_STOCK_PREFILL_STOCK
+            and self.decode_upgrade == ADMISSION_DECODE_UPGRADE_NONE
+            and self.decode_downgrade == ADMISSION_DECODE_DOWNGRADE_NONE
+        )
+
 
 class RegimeSwitchConfig(
     msgspec.Struct, frozen=True, forbid_unknown_fields=True
@@ -1240,7 +1277,7 @@ class RegimeSwitchConfig(
         self.prefill.validate()
         self.decode.validate()
         self.admission.validate()
-        if self.admission.enabled and not self.decode.enabled:
+        if self.admission.enabled and not self.decode.enabled and not self.admission.band_free:
             raise ValueError(
                 "regime switch admission.enabled requires decode.enabled: the "
                 "pin is decided from the decode band state"
@@ -1248,9 +1285,10 @@ class RegimeSwitchConfig(
 
     @property
     def pinning(self) -> bool:
-        """Per-request body pinning is in force for this served config."""
+        """Per-request body pinning is in force for this served config (a band-free admission block pins
+        without a decode leg: the FlashInfer arm's prefill-only routing)."""
 
-        return self.admission.enabled and self.decode.enabled
+        return self.admission.enabled and (self.decode.enabled or self.admission.band_free)
 def fdvp_fused_project_input_enabled():
     # [D-609] design constant, not an environment read
     return mechanism(SERVED_FUSED_PROJECT_INPUT)
@@ -1394,16 +1432,21 @@ def regime_switch_config(
     for leg in ("prefill", "decode"):
         if leg not in phases:
             design[leg] = {**design[leg], "enabled": False}
-    # [D-849] The pin is decided from the decode band state, so an arm without a
-    # decode leg (prefill-only) cannot pin: its admission block resolves disabled
-    # and the version-1 per-pass prefill decision governs that arm unchanged.
-    if not design["decode"]["enabled"]:
-        design["admission"] = {**design["admission"], "enabled": False}
     # [D-849 add. 23] an arm may override admission fields (the monotone lane sets the
     # criterion); declared in the tree, attested like the rest of the block.
     _adm_over = dict(active_arm().get("admission_overrides", {}))
     if _adm_over:
         design["admission"] = {**design["admission"], **_adm_over}
+    # [D-849] The pin is decided from the decode band state, so an arm without a
+    # decode leg (prefill-only) cannot pin: its admission block resolves disabled
+    # and the version-1 per-pass prefill decision governs that arm unchanged --
+    # unless its (overridden) block never reads the band (band_free: the FlashInfer
+    # arm, owner 2026-10-26), which keeps the served admission pinning. Applied after
+    # the overrides; no arm before vskipper_fi overrides admission without a decode leg.
+    if not design["decode"]["enabled"]:
+        _probe = msgspec.convert(design["admission"], type=RegimeSwitchAdmissionConfig)
+        if not _probe.band_free:
+            design["admission"] = {**design["admission"], "enabled": False}
     # [D-738] The K/V band is declared per device (design.SERVED_DECODE_KV_BAND_BY_DEVICE) and
     # asserted against the roofline rule at boot (model_runner). On the A100 the entry equals
     # the base declaration, so the served config is byte-identical to before this line.
@@ -1513,4 +1556,8 @@ def resolved_design_attestation() -> dict[str, Any]:
         "compact_phases": sorted(full_graph_compact_phases()),
         "gate_mode": full_graph_gate_mode(),
         "fused_router_norm": full_graph_fused_router_norm_enabled(),
+        # [owner 2026-11-09] False only on the cohorts-without-graphs control, whose decode passes run uncaptured
+        # by design; the two post-run gates read it here. Any other arm reports True and keeps the captured checks,
+        # so an override that ran its decode uncaptured is still refused there.
+        "coverage_dense": arm_coverage_dense(),
     }

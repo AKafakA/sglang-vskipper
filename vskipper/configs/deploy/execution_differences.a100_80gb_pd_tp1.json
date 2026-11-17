@@ -1,0 +1,167 @@
+{
+ "_comment": "What the P/D arms EXECUTE differently on the Vast 4x A100-SXM4-80GB node with every instance at TP1 (owner 2026-10-26: 1P1D = prefill GPU 0 + decode GPU 1; 2P2D = prefill GPUs 0 and 1 + decode GPUs 2 and 3), declared BEFORE any cell (incident-graph-ladder-confound-20260916, rule 1). Each instance runs the paper's single-A100-80GB integrated setting (execution_differences.json: fp16, mem 0.8, Triton, decode ladder 1024 for both arms); only SGLang's P/D settings are added, identical in both arms. TP1 -> TP1 KV transfers use mooncake's plain path (no staging buffer).",
+ "fields_compared": [
+  "decode_ladder_top",
+  "decode_ladder_buckets",
+  "decode_ladder_bs",
+  "decode_graph_backend",
+  "decode_tc_compiler",
+  "prefill_graph_backend",
+  "prefill_graph_bs",
+  "kv_capacity_tokens",
+  "chunked_prefill_size",
+  "mem_fraction_static",
+  "dtype",
+  "attention_backend",
+  "sampling_backend",
+  "decode_kv_band",
+  "tp_size"
+ ],
+ "tolerances": {
+  "kv_capacity_tokens_rel": 0.015,
+  "kv_capacity_tokens_abs": 3856,
+  "_note": "rel 0.015 as the paper's A100-80GB declaration (~3,840 displaced tokens = 0.98 % of a ~393k pool); abs 3856 = 3,840 + 16 for SGLang's boot-to-boot pool jitter (measured on the 40 GB node 2026-10-25). A smaller treatment pool only ever costs the treatment."
+ },
+ "declared": {
+  "upstream_pd_g1024": {
+   "decode_ladder_top": 1024,
+   "reason": "P/D decode instance (TP1): same-ladder control, upstream + --cuda-graph-max-bs 1024 = the fork's 4x max_bs ladder on this card (the paper's upstream_g1024)"
+  },
+  "vskipper_pd": {
+   "decode_ladder_top": 1024,
+   "kv_capacity_tokens": "smaller_ok",
+   "decode_kv_band": "rule",
+   "reason": "P/D decode instance = the paper's served design at TP1 (vskipper): ladder 1024 (4x max_bs); band by the rule for the A100-80GB (160k/200k); router/projector weights shrink the pool by <1.5 %; each request's body is pinned when it arrives at the decode instance (decode_pin_disaggregated)"
+  },
+  "upstream_pd_g1024__decode_b": {
+   "decode_ladder_top": 1024,
+   "reason": "2P2D second decode instance (TP1 on GPU 3): P/D decode instance (TP1): same-ladder control, upstream + --cuda-graph-max-bs 1024 = the fork's 4x max_bs ladder on this card (the paper's upstream_g1024)"
+  },
+  "vskipper_pd__decode_b": {
+   "decode_ladder_top": 1024,
+   "kv_capacity_tokens": "smaller_ok",
+   "decode_kv_band": "rule",
+   "reason": "2P2D second decode instance (TP1 on GPU 3): P/D decode instance = the paper's served design at TP1 (vskipper): ladder 1024 (4x max_bs); band by the rule for the A100-80GB (160k/200k); router/projector weights shrink the pool by <1.5 %; each request's body is pinned when it arrives at the decode instance (decode_pin_disaggregated)"
+  },
+  "upstream_pd_g1024__prefill": {
+   "decode_ladder_top": 256,
+   "reason": "P/D prefill instance (TP1 on GPU 0): never decodes; SGLang's P/D hook disables decode graphs (backend 'disabled'; the listed default buckets, 256 on this card, are never captured) -- value confirmed against the smoke snapshot before any cell"
+  },
+  "vskipper_pd__prefill": {
+   "decode_ladder_top": null,
+   "decode_ladder_buckets": 0,
+   "decode_ladder_bs": [],
+   "kv_capacity_tokens": "smaller_ok",
+   "decode_kv_band": "rule",
+   "reason": "P/D prefill instance (TP1 on GPU 0, arm vskipper): never decodes, captures no decode graph (decode backend disabled by SGLang's P/D hook); the router/projector weights displace ~3,840 K/V tokens; its attested band is the rule's A100-80GB band (unused: no decode)"
+  },
+  "upstream_pd_g1024__prefill_b": {
+   "decode_ladder_top": 256,
+   "reason": "P/D prefill instance (TP1 on GPU 1): never decodes; SGLang's P/D hook disables decode graphs (backend 'disabled'; the listed default buckets, 256 on this card, are never captured) -- value confirmed against the smoke snapshot before any cell"
+  },
+  "vskipper_pd__prefill_b": {
+   "decode_ladder_top": null,
+   "decode_ladder_buckets": 0,
+   "decode_ladder_bs": [],
+   "kv_capacity_tokens": "smaller_ok",
+   "decode_kv_band": "rule",
+   "reason": "P/D prefill instance (TP1 on GPU 1, arm vskipper): never decodes, captures no decode graph (decode backend disabled by SGLang's P/D hook); the router/projector weights displace ~3,840 K/V tokens; its attested band is the rule's A100-80GB band (unused: no decode)"
+  },
+  "vskipper_pdtuned_1p1d": {
+   "decode_ladder_top": 1024,
+   "kv_capacity_tokens": "smaller_ok",
+   "decode_kv_band": {
+    "pd_tuned": [
+     12000,
+     15000
+    ]
+   },
+   "reason": "P/D decode instance serving the pd_tuned band (12000/15000: the paper band at the decode instance's own load, upstream resident-K/V estimate 30336 tokens at 0.95 x Q* = 15 on this host); otherwise the served design"
+  },
+  "vskipper_pdtuned_1p1d__decode_b": {
+   "decode_ladder_top": 1024,
+   "kv_capacity_tokens": "smaller_ok",
+   "decode_kv_band": {
+    "pd_tuned": [
+     12000,
+     15000
+    ]
+   },
+   "reason": "2P2D second decode instance (TP1 on GPU 3): P/D decode instance = the paper's served design at TP1 (vskipper): ladder 1024 (4x max_bs); band by the rule for the A100-80GB (160k/200k); router/projector weights shrink the pool by <1.5 %; each request's body is pinned when it arrives at the decode instance (decode_pin_disaggregated)"
+  },
+  "vskipper_pdtuned_1p1d__prefill": {
+   "decode_ladder_top": null,
+   "decode_ladder_buckets": 0,
+   "decode_ladder_bs": [],
+   "kv_capacity_tokens": "smaller_ok",
+   "decode_kv_band": {
+    "pd_tuned": [
+     12000,
+     15000
+    ]
+   },
+   "reason": "P/D prefill instance (TP1 on GPU 0, arm vskipper): never decodes, captures no decode graph (decode backend disabled by SGLang's P/D hook); the router/projector weights displace ~3,840 K/V tokens; its attested band is the rule's A100-80GB band (unused: no decode)"
+  },
+  "vskipper_pdtuned_1p1d__prefill_b": {
+   "decode_ladder_top": null,
+   "decode_ladder_buckets": 0,
+   "decode_ladder_bs": [],
+   "kv_capacity_tokens": "smaller_ok",
+   "decode_kv_band": {
+    "pd_tuned": [
+     12000,
+     15000
+    ]
+   },
+   "reason": "P/D prefill instance (TP1 on GPU 1, arm vskipper): never decodes, captures no decode graph (decode backend disabled by SGLang's P/D hook); the router/projector weights displace ~3,840 K/V tokens; its attested band is the rule's A100-80GB band (unused: no decode)"
+  },
+  "vskipper_pdtuned_2p2d": {
+   "decode_ladder_top": 1024,
+   "kv_capacity_tokens": "smaller_ok",
+   "decode_kv_band": {
+    "pd_tuned": [
+     10000,
+     13000
+    ]
+   },
+   "reason": "P/D decode instance serving the pd_tuned band (10000/13000: the paper band at the decode instance's own load, upstream resident-K/V estimate 27147 tokens at 0.95 x Q* = 31 on this host); otherwise the served design"
+  },
+  "vskipper_pdtuned_2p2d__decode_b": {
+   "decode_ladder_top": 1024,
+   "kv_capacity_tokens": "smaller_ok",
+   "decode_kv_band": {
+    "pd_tuned": [
+     10000,
+     13000
+    ]
+   },
+   "reason": "2P2D second decode instance (TP1 on GPU 3): P/D decode instance = the paper's served design at TP1 (vskipper): ladder 1024 (4x max_bs); band by the rule for the A100-80GB (160k/200k); router/projector weights shrink the pool by <1.5 %; each request's body is pinned when it arrives at the decode instance (decode_pin_disaggregated)"
+  },
+  "vskipper_pdtuned_2p2d__prefill": {
+   "decode_ladder_top": null,
+   "decode_ladder_buckets": 0,
+   "decode_ladder_bs": [],
+   "kv_capacity_tokens": "smaller_ok",
+   "decode_kv_band": {
+    "pd_tuned": [
+     10000,
+     13000
+    ]
+   },
+   "reason": "P/D prefill instance (TP1 on GPU 0, arm vskipper): never decodes, captures no decode graph (decode backend disabled by SGLang's P/D hook); the router/projector weights displace ~3,840 K/V tokens; its attested band is the rule's A100-80GB band (unused: no decode)"
+  },
+  "vskipper_pdtuned_2p2d__prefill_b": {
+   "decode_ladder_top": null,
+   "decode_ladder_buckets": 0,
+   "decode_ladder_bs": [],
+   "kv_capacity_tokens": "smaller_ok",
+   "decode_kv_band": {
+    "pd_tuned": [
+     10000,
+     13000
+    ]
+   },
+   "reason": "P/D prefill instance (TP1 on GPU 1, arm vskipper): never decodes, captures no decode graph (decode backend disabled by SGLang's P/D hook); the router/projector weights displace ~3,840 K/V tokens; its attested band is the rule's A100-80GB band (unused: no decode)"
+  }
+ }
+}

@@ -31,7 +31,10 @@ CONFIGS = ROOT / "vskipper/src/vskipper/kernels/binary_cohort_configs"
 
 
 def _load_kernel():
-    sys.modules.setdefault("torch", types.ModuleType("torch"))
+    try:
+        import torch  # noqa: F401  -- a real torch keeps every later test module importable
+    except ImportError:
+        sys.modules.setdefault("torch", types.ModuleType("torch"))
     spec = importlib.util.spec_from_file_location("_vp_kernel_under_test", KERNEL)
     module = importlib.util.module_from_spec(spec)
     try:
@@ -76,7 +79,7 @@ def test_capacity_is_stripped_but_memory_TECHNOLOGY_is_not():
 
 
 def test_no_form_factor_suffix_survives_in_any_committed_artifact():
-    for path in CONFIGS.glob("*.json"):
+    for path in CONFIGS.rglob("*.json"):
         assert kernel.canonical_device_key(path.stem) == path.stem, (
             f"{path.name} is not already canonical -- it would never be found"
         )

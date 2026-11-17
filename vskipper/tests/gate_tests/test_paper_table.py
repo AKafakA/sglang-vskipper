@@ -153,3 +153,32 @@ def test_verify_follows_the_TeX_PRIMITIVE_wrapper_too(tmp_path: Path):
     check = _run(report, "--knee", "gsm8k=11", "--knee", "bbh_cot=25",
                  "--verify", tmp_path / "main.tex")
     assert check.returncode == 0, check.stderr
+
+
+def test_saturated_TPS_RPS_only_on_the_1_25_row(tmp_path: Path):
+    """TPS and RPS are defined only at 1.25 x Q* (owner, 2026-10-28): two columns after makespan, filled only on the
+    configuration's 1.25 x Q* row, empty on its lower-load rows; verify reads them there and catches a wrong value."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("paper_table_under_test", TOOL)
+    tool = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(tool)
+    rows = [{"dataset": "gsm8k", "suite": f"gsm8k_eqw_r{str(11.0 * m).replace('.', 'p')}", "metric": c, "field": c, "n": 6,
+             "mean_pct": -1.0 - i, "ci95_half": 0.3, "verdict": "x"}
+            for m in (0.75, 0.95, 1.25) for i, c in enumerate(tool.COLUMNS)]   # every default column, from the tool itself
+    report = tmp_path / "r.json"
+    report.write_text(json.dumps({"baseline": "upstream", "treatment": "t", "rows": rows}))
+    cap = tmp_path / "cap.json"
+    cap.write_text(json.dumps({"k": {"n": 6, "output_tps_pct": [10.4, 0.3], "completed_rps_pct": [11.3, 0.2]}}))
+    args = (report, "--knee", "gsm8k=11", "--saturated", f"gsm8k={cap}:k")
+    for grouped in ((), ("--group-rows", "--no-n-col")):
+        out = _run(*args, *grouped, "--emit")
+        assert out.returncode == 0, out.stderr
+        rates = [l for l in out.stdout.splitlines() if "Q^*" in l]
+        top = [l for l in rates if "1.25" in l]
+        assert len(top) == 1 and top[0].rstrip("%").rstrip().endswith("+10.4 $\\pm$ 0.3 & +11.3 $\\pm$ 0.2 \\\\")
+        assert not any("10.4" in l or "11.3" in l for l in rates if "1.25" not in l)
+        (tmp_path / "main.tex").write_text(out.stdout)
+        assert _run(*args, *grouped, "--verify", tmp_path / "main.tex").returncode == 0
+        (tmp_path / "bad.tex").write_text(out.stdout.replace("+11.3", "+19.9"))
+        bad = _run(*args, *grouped, "--verify", tmp_path / "bad.tex")
+        assert bad.returncode == 1 and "RPS (saturated)" in bad.stderr

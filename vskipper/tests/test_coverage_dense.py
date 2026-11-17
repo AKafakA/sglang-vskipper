@@ -639,12 +639,15 @@ def test_gate_mode_is_attested_from_the_arm() -> None:
         assert block["gate_branch_scaling"] == "hard_selection_no_w_scaling"
 
 
-def test_native_dense_mlp_applies_the_declared_gate_arithmetic() -> None:
+def test_native_dense_mlp_applies_the_declared_gate_arithmetic(monkeypatch) -> None:
     """The dense body must implement both gates exactly: `released` scales each branch by the
     router weight, `hard_mask` scales neither and relies on the hard selection alone."""
     import torch
 
     from vskipper.kernels.mlp import _native_dense_mlp
+    from vskipper.kernels import mlp
+
+    monkeypatch.setattr(mlp, "_tp_world_size", lambda: 1)  # single process, TP1 (mlp._tp_reduce asks the TP group)
 
     rows, hidden = 6, 8
     torch.manual_seed(0)

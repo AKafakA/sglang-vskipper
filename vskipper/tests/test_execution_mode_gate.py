@@ -52,7 +52,7 @@ def test_loaded_router_layers_must_match():
 
 @pytest.mark.parametrize("tp,pp", [(2, 1), (1, 2)])
 def test_unsupported_parallel_topology_is_rejected(tp, pp):
-    with pytest.raises(ValueError, match="TP=1 and PP=1"):
+    with pytest.raises(ValueError, match="PP=1 and TP in"):
         _validate(ROUTED, tp=tp, pp=pp)
 
 

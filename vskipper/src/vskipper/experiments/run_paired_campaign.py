@@ -108,6 +108,52 @@ def launch_profile(spec: dict[str, Any]) -> dict[str, Any]:
     return _PROFILE_CACHE[key]
 
 
+_SUBSTRATE_CACHE: dict[str, str] = {}
+#: The unified Triton substrate of every paper cell (D-187): three backend flags + FlashInfer reported unavailable.
+TRITON_SUBSTRATE_ARGS = ("--attention-backend=triton", "--prefill-attention-backend=triton", "--decode-attention-backend=triton")
+
+
+def launch_substrate(spec: dict[str, Any]) -> str:
+    """The attention substrate of the spec's launch profile, read from the TREE's design table
+    (design.SERVED_ATTENTION_SUBSTRATE_BY_PROFILE; owner 2026-10-26, rebuttal FlashInfer arm): "triton" (the paper's
+    unified substrate, D-187) unless the profile names "flashinfer". A tree or profile without an entry is "triton", so
+    every earlier campaign launches exactly as before."""
+    name = launch_profile_name(spec)
+    key = f"{spec['tree']}::{name}"
+    if key not in _SUBSTRATE_CACHE:
+        env = dict(os.environ)
+        env["PYTHONPATH"] = os.pathsep.join((str(Path(spec["tree"]) / "vskipper/src"),
+                                           str(Path(spec["tree"]) / "python")))
+        code = ("import json, sys; from vskipper.runtime import design; "
+                "table = getattr(design, 'SERVED_ATTENTION_SUBSTRATE_BY_PROFILE', {}); "
+                "print(json.dumps(table.get(sys.argv[1], 'triton')))")
+        done = subprocess.run([spec["python"], "-c", code, name or ""], env=env, capture_output=True, text=True)
+        if done.returncode != 0:
+            raise RuntimeError(f"attention substrate of profile {name!r} could not be read from the tree: "
+                               f"{done.stderr.strip()[-400:]}")
+        substrate = json.loads(done.stdout.strip().splitlines()[-1])
+        if substrate not in ("triton", "flashinfer"):
+            raise RuntimeError(f"profile {name!r} declares unknown attention substrate {substrate!r}")
+        _SUBSTRATE_CACHE[key] = substrate
+    return _SUBSTRATE_CACHE[key]
+
+
+def substrate_args(spec: dict[str, Any]) -> list[str]:
+    """Launch flags of the substrate, both arms: the three Triton flags, or none (SGLang's own defaults)."""
+    return list(TRITON_SUBSTRATE_ARGS) if launch_substrate(spec) == "triton" else []
+
+
+def substrate_environment(spec: dict[str, Any], environment: dict[str, str]) -> dict[str, str]:
+    """The substrate's environment, both arms: FlashInfer reported unavailable under Triton (so upstream's default sampler is
+    pytorch, declared in SERVED_LAUNCH_EXEMPTIONS); left as the process has it under FlashInfer."""
+    out = dict(environment)
+    if launch_substrate(spec) == "triton":
+        out["SGLANG_IS_FLASHINFER_AVAILABLE"] = "false"
+    else:
+        out.pop("SGLANG_IS_FLASHINFER_AVAILABLE", None)
+    return out
+
+
 def log(message: str) -> None:
     print(f"[{time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())}] {message}", flush=True)
 
@@ -133,6 +179,10 @@ def preflight(spec: dict[str, Any]) -> list[str]:
     if not (tree / spec["host_config"]).is_file():
         problems.append(f"host config missing: {tree / spec['host_config']}")
     for role, arm in campaign_arms(spec):
+        # P/D: a fork arm's deployment identity is its decode instance (run_arm_boot's expect_arm), which serves
+        # spec["pd"]["decode"]["fork_arm"]; an upstream arm is its own expectation
+        if spec.get("pd") and not arm_is_upstream(spec, arm):
+            arm = str(spec["pd"]["decode"]["fork_arm"])
         expect = Path(spec["expect_dir"]) / f"expect_{arm}.json"
         if not expect.is_file():
             problems.append(f"{role} arm {arm}: no expected-runtime file {expect}")
@@ -177,7 +227,8 @@ def upstream_arms(spec: dict[str, Any]) -> dict[str, list[str]]:
     declared = spec.get("upstream_arms")
     if declared is None:
         return {spec.get("upstream_arm_name", "upstream"): []}
-    return {name: list(extra) for name, extra in declared.items()}
+    # a P/D arm declares its extra arguments per instance role: {"prefill": [...], "decode": [...]}
+    return {name: (dict(extra) if isinstance(extra, dict) else list(extra)) for name, extra in declared.items()}
 
 
 def arm_is_upstream(spec: dict[str, Any], arm: str) -> bool:
@@ -226,13 +277,103 @@ def campaign_preflight_gate(spec: dict[str, Any],
     return subprocess.run(command, capture_output=True, text=True)
 
 
+PD_ROLES = ("prefill", "decode")
+
+
+def pd_roles(pd: dict[str, Any]) -> tuple[str, ...]:
+    """The instance roles of a P/D group: one or more prefill and one or more decode instances (owner 2026-10-25: 2P1D;
+    2026-10-26: 1P1D and 2P2D). `spec["pd"]["roles"]` lists them (default: one prefill + one decode); a role's name starts
+    with "prefill" or "decode", and "prefill" and "decode" (the first of each) are always present."""
+    roles = tuple(pd.get("roles") or PD_ROLES)
+    if (len(set(roles)) != len(roles) or "prefill" not in roles or "decode" not in roles
+            or not all(r.startswith(("prefill", "decode")) for r in roles)):
+        raise ValueError(f"P/D roles {roles}: want distinct prefill* and decode* roles including 'prefill' and 'decode'")
+    return roles
+
+
+def _raise_nofile_limit() -> None:
+    """The in-tree MiniLB router opens two upstream connections per in-flight request and, unlike sglang.launch_server
+    (set_ulimit), never raises its open-file limit: under open-loop load it failed with "Too many open files"
+    (2026-10-24 12:25Z). Raise the soft limit to the hard limit for the router process; the same router serves both arms."""
+    import resource
+
+    soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+    resource.setrlimit(resource.RLIMIT_NOFILE, (hard, hard))
+
+
 class Server:
-    """One booted arm. Boot, attest, tear down -- and never leave a process behind."""
+    """One booted arm. Boot, attest, tear down -- and never leave a process behind.
+
+    With ``spec["pd"]`` (P/D disaggregation, 2026-10-24) the arm is a GROUP: a prefill and a decode
+    instance and the in-tree router in front of them. ``port`` is the router (what the client
+    drives); the prefill and decode instances listen on port+1 / port+2. The decode instance is the
+    arm's deployment identity (manifest, per-cell server_info, gates, load); the prefill instance's
+    server_info is recorded beside every cell. Each instance is attested on its own (G1 for fork
+    roles, absence of vp_runtime for upstream, Gate E against its role's launch profile). A fork
+    arm serves ``spec["pd"][role]["fork_arm"]`` from ``spec["pd"][role]["tree"]`` (the arm is chosen
+    per tree, and the two roles may differ in TP size)."""
 
     def __init__(self, spec: dict[str, Any], arm: str, port: int, log_path: Path) -> None:
         self.spec, self.arm, self.port, self.log_path = spec, arm, port, log_path
         self.upstream = arm_is_upstream(spec, arm)
         self.process: subprocess.Popen[bytes] | None = None
+        self.pd = spec.get("pd")
+        # router :port, first prefill :port+1, first decode :port+2, every further instance (in role order) :port+3, :port+4, ...
+        self.roles = pd_roles(self.pd) if self.pd else ()
+        self.prefill_roles = tuple(r for r in self.roles if r.startswith("prefill"))
+        self.decode_roles = tuple(r for r in self.roles if r.startswith("decode"))
+        # every instance but the first decode (the deployment identity) is recorded beside each cell
+        self.sidecar_roles = tuple(r for r in self.roles if r != "decode")
+        extra = [r for r in self.roles if r not in PD_ROLES]
+        self.role_ports = ({"prefill": port + 1, "decode": port + 2}
+                           | {r: port + 3 + i for i, r in enumerate(extra)}) if self.pd else {}
+        self.server_port = self.role_ports["decode"] if self.pd else port
+        self.prefill_port = self.role_ports["prefill"] if self.pd else None
+        self.role_processes: dict[str, subprocess.Popen[bytes]] = {}
+
+    def role_arm(self, role: str) -> str:
+        return self.arm if self.upstream else str(self.pd[role]["fork_arm"])
+
+    def role_tree(self, role: str) -> Path:
+        return Path(self.spec["upstream_tree"]) if self.upstream else Path(self.pd[role]["tree"])
+
+    def role_log(self, role: str) -> Path:
+        return self.log_path.with_name(f"{self.log_path.stem}.{role}{self.log_path.suffix}")
+
+    def role_extra(self, role: str) -> list[str]:
+        extra = upstream_arms(self.spec).get(self.arm, {}) if self.upstream else {}
+        return list(extra.get(role, [])) if isinstance(extra, dict) else list(extra)
+
+    def role_command(self, role: str) -> list[str]:
+        profile_args: list[str] = []
+        for key, value in launch_profile({**self.spec, "launch_profile": self.pd[role]["launch_profile"]}).items():
+            profile_args += [f"--{key.replace('_', '-')}", str(value)]
+        return [
+            self.spec["python"], "-m", "sglang.launch_server",
+            "--model-path", self.spec["model_path"],
+            "--revision", model_revision(self.spec),
+            "--served-model-name", served_model_name(self.spec),
+            "--host", "127.0.0.1", "--port", str(self.role_ports[role]),
+            *profile_args,
+            "--attention-backend=triton",
+            "--prefill-attention-backend=triton",
+            "--decode-attention-backend=triton",
+            *self.role_extra(role),
+        ]
+
+    def bootstrap_port(self, role: str) -> int:
+        """A prefill instance's bootstrap port: its role's (several prefill instances) or the group's."""
+        return int(self.pd[role].get("bootstrap_port", self.pd["bootstrap_port"]))
+
+    def router_command(self) -> list[str]:
+        return [
+            self.spec["python"], "-m", "sglang_router.launch_router",
+            "--pd-disaggregation", "--mini-lb",
+            *[a for r in self.prefill_roles for a in ("--prefill", f"http://127.0.0.1:{self.role_ports[r]}",
+                                                       str(self.bootstrap_port(r)))],
+            *[a for r in self.decode_roles for a in ("--decode", f"http://127.0.0.1:{self.role_ports[r]}")],
+            "--host", "127.0.0.1", "--port", str(self.port),
+        ]
 
     def command(self) -> list[str]:
         # Beyond the D-187 substrate, ONLY the launch profile's arguments are passed
@@ -250,18 +391,136 @@ class Server:
             "--served-model-name", served_model_name(self.spec),
             "--host", "127.0.0.1", "--port", str(self.port),
             *profile_args,
-            "--attention-backend=triton",
-            "--prefill-attention-backend=triton",
-            "--decode-attention-backend=triton",
+            # the attention substrate of the launch profile, both arms (Triton for every paper cell)
+            *substrate_args(self.spec),
             # per-arm extra launch arguments exist ONLY for upstream-served arms (the same-ladder
             # control); fork arms are selected in the tree and take no per-arm flags.
             *(upstream_arms(self.spec).get(self.arm, []) if self.upstream else []),
         ]
 
+    def _wait_health(self, port: int, process: subprocess.Popen[bytes], what: str, log: Path) -> None:
+        for _ in range(180):
+            if process.poll() is not None:
+                raise RuntimeError(f"{what} exited during boot; see {log}")
+            try:
+                urllib.request.urlopen(f"http://127.0.0.1:{port}/health", timeout=3).read()
+                return
+            except Exception:
+                time.sleep(5)
+        raise RuntimeError(f"{what} never became healthy; see {log}")
+
+    def _enter_pd(self) -> Server:
+        # Refuse to boot onto a port something still holds: an orphaned router (it renames itself sglang::router, so
+        # pattern kills miss it) served a later run's requests on 2026-10-24.
+        import socket
+
+        for port in (self.port, *self.role_ports.values(), *{self.bootstrap_port(r) for r in self.prefill_roles}):
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+                if probe.connect_ex(("127.0.0.1", port)) == 0:
+                    raise RuntimeError(f"P/D boot refused: 127.0.0.1:{port} is already in use (orphaned server or router?)")
+        base = dict(os.environ)
+        base["SGLANG_IS_FLASHINFER_AVAILABLE"] = "false"
+        # every instance sees the same devices and selects its own with --base-gpu-id (in its
+        # role's launch profile): the transfer engine opens peer memory across the two processes
+        base["CUDA_VISIBLE_DEVICES"] = str(self.pd["visible_devices"])
+        # the KV-transfer substrate, the same for both arms and declared in the spec (e.g. mooncake's intra-node NVLink
+        # transport: SGLang's documented setting for A100); recorded beside every boot (launch_env.json)
+        base.update({str(k): str(v) for k, v in (self.pd.get("env") or {}).items()})
+        for role in self.roles:
+            environment = dict(base)
+            if self.upstream:
+                environment["PYTHONPATH"] = str(Path(self.spec["upstream_tree"]) / "python")
+                for key in ("SGLANG_VP_HOST_CONFIG", "SGLANG_FD_WEIGHTS"):
+                    environment.pop(key, None)
+            else:
+                tree = self.role_tree(role)
+                (tree / "vskipper/configs/deploy/active_arm").write_text(self.role_arm(role) + "\n")
+                environment["PYTHONPATH"] = os.pathsep.join((str(tree / "vskipper/src"), str(tree / "python")))
+                environment["SGLANG_VP_HOST_CONFIG"] = str(tree / self.spec["host_config"])
+            self.role_processes[role] = subprocess.Popen(
+                self.role_command(role), stdout=self.role_log(role).open("wb"), stderr=subprocess.STDOUT,
+                env=environment, start_new_session=True)
+        for role in self.roles:
+            self._wait_health(self.role_ports[role], self.role_processes[role], f"{self.arm} {role}", self.role_log(role))
+        router_env = dict(os.environ)
+        # the router is the same in-tree code for every arm (the upstream checkout's)
+        router_env["PYTHONPATH"] = os.pathsep.join([
+            str(Path(self.spec["upstream_tree"]) / "sgl-model-gateway/bindings/python/src"),
+            str(Path(self.spec["upstream_tree"]) / "python")])
+        self.process = subprocess.Popen(
+            self.router_command(), stdout=self.log_path.open("wb"), stderr=subprocess.STDOUT,
+            env=router_env, start_new_session=True, preexec_fn=_raise_nofile_limit)
+        self._wait_health(self.port, self.process, f"{self.arm} router", self.log_path)
+        for role in self.roles:
+            port, role_arm = self.role_ports[role], self.role_arm(role)
+            snapshot_arm = self.arm if role == "decode" else f"{self.arm}__{role}"
+            exemptions = self.spec.get("upstream_arm_exemptions", {}).get(self.arm)
+            if isinstance(exemptions, dict) and exemptions and set(exemptions) <= set(self.roles):
+                exemptions = exemptions.get(role)
+            if self.upstream:
+                info = server_info(port)
+                try:
+                    design = info["internal_states"][0]["vp_runtime"]["served_design"]
+                except (KeyError, IndexError, TypeError):
+                    design = None
+                if design is not None:
+                    raise RuntimeError(f"arm {self.arm!r} {role} is declared upstream but serves vp_runtime "
+                                       f"({design.get('arm')!r}); refusing")
+                log(f"    {self.arm} {role} up on :{port}, attested UPSTREAM (no vp_runtime)")
+            else:
+                gate = Path(self.spec["tree"]) / "vskipper/src/vskipper/experiments/gates/verify_served_design.py"
+                done = subprocess.run(
+                    [sys.executable, str(gate), "--url", f"http://127.0.0.1:{port}",
+                     "--arm", role_arm, "--tree", str(self.role_tree(role))],
+                    capture_output=True, text=True)
+                if done.returncode != 0:
+                    tail = (done.stdout + done.stderr).strip().splitlines()
+                    raise RuntimeError(f"G1 served-design gate REFUSED {role} arm {role_arm!r}: "
+                                       f"{tail[-1][:200] if tail else 'no output'}")
+                live = served_arm(port)
+                if live != role_arm:
+                    raise RuntimeError(f"{role}: asked for arm {role_arm!r} but the instance serves {live!r}")
+                log(f"    G1 served design == intended design ({self.arm}: {role} = {role_arm})")
+            default_conformance_gate(self.spec, self.arm, port, snapshot_arm=snapshot_arm,
+                                     profile=self.pd[role]["launch_profile"], exemptions=exemptions)
+        log(f"    {self.arm} P/D group up: router :{self.port}, "
+            + ", ".join(f"{r} :{self.role_ports[r]}" for r in self.roles))
+        return self
+
+    # A P/D group boots three or more SGLang processes at once; each picks its torch.distributed port with get_free_port()
+    # (an ephemeral port, bound later), and the transfer engine's TCP sockets draw from the same ephemeral range, so a boot
+    # can lose that race (2026-10-25 05:13Z, upstream decode instance: EADDRINUSE on its TCPStore port). Such a boot -- and
+    # only such a boot -- is torn down and repeated, up to this many times in all; every other boot failure raises at once.
+    PD_PORT_CLASH_BOOTS = 3
+
+    def _boot_lost_port_race(self) -> bool:
+        paths = [self.role_log(r) for r in self.roles] + [self.log_path]
+        return any(path.is_file() and ("EADDRINUSE" in (text := path.read_text(errors="replace")) or "address already in use" in text)
+                   for path in paths)
+
     def __enter__(self) -> Server:
+        # A gate that refuses after the boot must not leave the server (or a P/D group) behind: the next arm would boot onto
+        # a port this one still answers (2026-10-24, TP4 rep 2: a refused fork arm kept serving and upstream was refused).
+        for boot in range(1, (self.PD_PORT_CLASH_BOOTS if self.pd else 1) + 1):
+            try:
+                return self._enter_pd() if self.pd else self._enter()
+            except Exception:
+                self.__exit__(None, None, None)
+                if not (self.pd and boot < self.PD_PORT_CLASH_BOOTS and self._boot_lost_port_race()):
+                    raise
+                for path in [self.role_log(r) for r in self.roles] + [self.log_path]:
+                    if path.is_file():
+                        path.rename(path.with_name(f"{path.name}.port-clash-boot{boot}"))
+                log(f"    {self.arm}: P/D boot {boot} lost a port race (EADDRINUSE); fresh boot {boot + 1}")
+                time.sleep(10)
+            except BaseException:
+                self.__exit__(None, None, None)
+                raise
+        raise AssertionError("unreachable")
+
+    def _enter(self) -> Server:
         tree = Path(self.spec["tree"])
-        environment = dict(os.environ)
-        environment["SGLANG_IS_FLASHINFER_AVAILABLE"] = "false"
+        environment = substrate_environment(self.spec, dict(os.environ))
         if self.upstream:
             # Served from the upstream tree, with NO vpipe environment at all. There is no
             # active_arm to write and no host config to point at -- that tree has neither.
@@ -336,22 +595,27 @@ class Server:
         return self
 
     def __exit__(self, *_: object) -> None:
-        if self.process is None or self.process.poll() is not None:
-            return
-        os.killpg(os.getpgid(self.process.pid), signal.SIGTERM)
-        try:
-            self.process.wait(timeout=60)
-        except subprocess.TimeoutExpired:
-            os.killpg(os.getpgid(self.process.pid), signal.SIGKILL)
-            self.process.wait(timeout=30)
+        for process in [self.process, *self.role_processes.values()]:
+            if process is None or process.poll() is not None:
+                continue
+            os.killpg(os.getpgid(process.pid), signal.SIGTERM)
+            try:
+                process.wait(timeout=60)
+            except subprocess.TimeoutExpired:
+                os.killpg(os.getpgid(process.pid), signal.SIGKILL)
+                process.wait(timeout=30)
 
 
-def default_conformance_gate(spec: dict[str, Any], arm: str, port: int) -> None:
+def default_conformance_gate(spec: dict[str, Any], arm: str, port: int, *, snapshot_arm: str | None = None,
+                             profile: str | None = None, exemptions: dict[str, Any] | None = None) -> None:
     """Gate E (D-184, restored by D-757): this server runs at SGLang's DEFAULTS for its model
     on this device, except the knobs design.SERVED_LAUNCH_EXEMPTIONS names. Both arms, at
     boot, before any GPU time is spent. The cross-arm gate cannot see what both arms share;
     this one compares each arm against the defaults the BASELINE tree computes."""
-    snapshot = Path(spec["staging_root"]) / f"server_info.conformance.{arm}.{port}.json"
+    snapshot = Path(spec["staging_root"]) / f"server_info.conformance.{snapshot_arm or arm}.{port}.json"
+    profile = profile or launch_profile_name(spec)
+    if exemptions is None:
+        exemptions = spec.get("upstream_arm_exemptions", {}).get(arm)
     snapshot.parent.mkdir(parents=True, exist_ok=True)
     snapshot.write_text(json.dumps(server_info(port), indent=2, sort_keys=True) + "\n")
     # The gate is THIS driver's (a legacy tree booted for equivalence has neither the gate nor
@@ -363,12 +627,11 @@ def default_conformance_gate(spec: dict[str, Any], arm: str, port: int) -> None:
          "--model-path", spec["model_path"], "--defaults-tree", spec["upstream_tree"],
          "--design-tree", spec["tree"], "--python", spec["python"],
          "--fallback-design-tree", str(Path(__file__).resolve().parents[4]),
-         *(["--launch-profile", launch_profile_name(spec)] if launch_profile_name(spec) else []),
+         *(["--launch-profile", profile] if profile else []),
          # an upstream-served arm launched with extra arguments must declare EVERY resolved
          # field those arguments change (spec["upstream_arm_exemptions"][arm]); otherwise the
          # gate holds it to the defaults and refuses -- the ladder-control lesson made a gate.
-         *(["--arm-exemptions", json.dumps(spec["upstream_arm_exemptions"][arm])]
-           if arm in spec.get("upstream_arm_exemptions", {}) else [])],
+         *(["--arm-exemptions", json.dumps(exemptions)] if exemptions else [])],
         capture_output=True, text=True,
     )
     if upstream_arms(spec).get(arm) and arm not in spec.get("upstream_arm_exemptions", {}):
@@ -386,7 +649,8 @@ def default_conformance_gate(spec: dict[str, Any], arm: str, port: int) -> None:
 
 
 def runner_command(spec: dict[str, Any], arm: str, manifest: Path, qps_config: Path,
-                   cells_dir: Path, port: int) -> list[str]:
+                   cells_dir: Path, port: int, server_port: int | None = None,
+                   prefill_ports: tuple[int, ...] = (), decode_ports: tuple[int, ...] = ()) -> list[str]:
     """The run_qps_evaluation.py invocation for ONE booted arm.
 
     Shared by the perf lane (run_arm_cells) and the natural-lane harvest (run_natural_harvest.py)
@@ -426,6 +690,11 @@ def runner_command(spec: dict[str, Any], arm: str, manifest: Path, qps_config: P
          # artifacts are renamed INVALID.* and GR-1a fails that rate -- it simply no
          # longer takes its siblings down.
          "--continue-after-accounting-rejection"]
+        # P/D: the client drives the router (--port); identity, gates and load come from the decode instance
+        + (["--server-port", str(server_port)] if server_port not in (None, port) else [])
+        + [a for p in prefill_ports for a in ("--prefill-server-port", str(p))]
+        # further decode instances (2P2D): their server_info pair is recorded beside the identity's
+        + [a for p in decode_ports for a in ("--decode-server-port", str(p))]
         # A re-measure boots a FRESH runner into cells_retry<k>/ (never resume mode: the
         # runner refuses a resume whose qps config differs); run_arm_cells then moves the
         # re-measured labels into cells/, where every downstream reader looks.
@@ -509,10 +778,22 @@ def run_arm_boot(spec: dict[str, Any], dataset: str, rates: dict[str, float],
 
     with Server(spec, arm, port, server_log) as server:
         (cell_root / "server_info.before.json").write_text(
-            json.dumps(server_info(port), indent=2, sort_keys=True) + "\n")
+            json.dumps(server_info(server.server_port), indent=2, sort_keys=True) + "\n")
 
         launch = cell_root / "launch_command.json"
-        launch.write_text(json.dumps(server.command()) + "\n")
+        if server.pd:
+            # the first decode instance is the deployment identity; every other instance's command sits beside it
+            launch.write_text(json.dumps(server.role_command("decode")) + "\n")
+            for role in server.sidecar_roles:
+                (cell_root / f"launch_command.{role}.json").write_text(json.dumps(server.role_command(role)) + "\n")
+            (cell_root / "launch_command.router.json").write_text(json.dumps(server.router_command()) + "\n")
+            (cell_root / "launch_env.json").write_text(json.dumps(server.pd.get("env") or {}, sort_keys=True) + "\n")
+            for role in server.sidecar_roles:
+                (cell_root / f"server_info.{role}.before.json").write_text(
+                    json.dumps(server_info(server.role_ports[role]), indent=2, sort_keys=True) + "\n")
+        else:
+            launch.write_text(json.dumps(server.command()) + "\n")
+        expect_arm = server.role_arm("decode") if server.pd else arm
         manifest = cell_root / "deployment_manifest.json"
         subprocess.run(
             [spec["python"], str(tree / "vskipper/src/vskipper/experiments/make_deployment_manifest.py"),
@@ -522,8 +803,8 @@ def run_arm_boot(spec: dict[str, Any], dataset: str, rates: dict[str, float],
              "--client-tokenizer-path", spec["model_path"],
              "--source-revision", spec["source_revision"],
              "--launch-command-file", str(launch),
-             "--expected-runtime-json", str(Path(spec["expect_dir"]) / f"expect_{arm}.json"),
-             "--host", "127.0.0.1", "--port", str(port), "--out", str(manifest)],
+             "--expected-runtime-json", str(Path(spec["expect_dir"]) / f"expect_{expect_arm}.json"),
+             "--host", "127.0.0.1", "--port", str(server.server_port), "--out", str(manifest)],
             check=True, capture_output=True,
         )
 
@@ -544,12 +825,19 @@ def run_arm_boot(spec: dict[str, Any], dataset: str, rates: dict[str, float],
         # fewer than their whole suite. The runner derives duration = rows/qps per cell,
         # which is the only form that keeps work identical across rates.
         completed = subprocess.run(
-            runner_command(spec, arm, manifest, qps_config, cells_dir, port),
+            runner_command(spec, arm, manifest, qps_config, cells_dir, port,
+                           server_port=server.server_port,
+                           prefill_ports=tuple(server.role_ports[r] for r in server.prefill_roles),
+                           decode_ports=tuple(server.role_ports[r] for r in server.decode_roles if r != "decode")),
             check=False, stdout=(cell_root / "runner.log").open("wb"),
             stderr=subprocess.STDOUT,
         )
         (cell_root / "server_info.after.json").write_text(
-            json.dumps(server_info(port), indent=2, sort_keys=True) + "\n")
+            json.dumps(server_info(server.server_port), indent=2, sort_keys=True) + "\n")
+        if server.pd:
+            for role in server.sidecar_roles:
+                (cell_root / f"server_info.{role}.after.json").write_text(
+                    json.dumps(server_info(server.role_ports[role]), indent=2, sort_keys=True) + "\n")
     return completed.returncode
 
 

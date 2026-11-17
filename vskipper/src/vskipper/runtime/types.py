@@ -218,6 +218,9 @@ class FullGraphSkipperAdapter(ABC):
     requires_stable_request_ids: bool = False
     route_digest_requires_stable_request_ids: bool = False
     requires_request_slots: bool = False
+    #: Does the policy read each row's prompt length? D³ counts generated tokens, the
+    #: engine's positions count the prompt too. `prepare_batch` then gets `prompt_lens`.
+    requires_prompt_lens: bool = False
     execution_kind: str = RUN_PROJECT_EXECUTION
 
     #: Does the POLICY read trained gate weights from the checkpoint? FlexiDepth

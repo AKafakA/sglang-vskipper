@@ -46,8 +46,14 @@ n = sorted({row.get("n") for row in rows}); print("  paired report:", len(rows),
 PY
 printf '\\vpUpstreamBanks%s\n' true > generated/bank_policy.tex
 
+say "1b throughput under saturation at 1.25 x Q*: TPS and RPS inside the injection window, from the compact per-cell record (one value per configuration: the TPS/RPS columns of the headline, cross-model and hardware tables)"
+[ -f $AN/capacity/capacity_compact.json ] || { echo "  MISSING $AN/capacity/capacity_compact.json"; exit 1; }
+python3 $VP/capacity_window.py emit $AN/capacity/capacity_compact.json generated/ && echo "  $(grep -c '\\\\' generated/capacity_rows.tex) throughput rows"
+CAP=generated/capacity.json
+
 say "2  headline rows + macros (main / tails), absolutes, latency-map figure"
-python3 $VP/paper_table.py generated/paired_report.json "${KNEES[@]}" --emit --columns main --macros generated/headline_macros.tex --group-rows --no-n-col --order gsm8k,bbh_cot,coqa > generated/headline_rows.tex   # v1.7 rc5: grouped by workload, n in the caption
+python3 $VP/paper_table.py generated/paired_report.json "${KNEES[@]}" --emit --columns main --macros generated/headline_macros.tex --group-rows --no-n-col --order gsm8k,bbh_cot,coqa \
+  --saturated gsm8k=$CAP:llama_a100_gsm8k --saturated bbh_cot=$CAP:llama_a100_bbh --saturated coqa=$CAP:llama_a100_coqa > generated/headline_rows.tex   # v1.7 rc5: grouped by workload, n in the caption
 python3 $VP/abs_macros.py generated/headline_macros.tex generated/headline_macros_abs.tex
 python3 $VP/paper_table.py generated/paired_report.json "${KNEES[@]}" --emit --columns tails > generated/tails_rows.tex
 python3 $VP/absolutes_table.py generated/paired_report.json "${KNEES[@]}" --out generated/absolute_rows.tex --macros generated/absolute_macros.tex
@@ -57,10 +63,10 @@ grep -c '\\\\' generated/headline_rows.tex | xargs printf '  %s headline rows\n'
 say "3  transfer rows: H100 500 W (Q*=14), RTX A6000, A100-40 (each from its own paired report when present)"
 rm -f generated/h100_rows.tex generated/h100_macros.tex generated/a6000_rows.tex generated/a6000_macros.tex
 H=$EV/h100-500w/ladder/h100_gsm8k/paired_report.upstream_g1024__vskipper.json
-[ -f $H ] && python3 $VP/paper_table.py $H --knee gsm8k=14 --emit --columns main --dataset-label "H100" --macros generated/h100_macros.tex --macro-prefix vpHone > generated/h100_rows.tex && echo "  H100: $(grep -c '\\\\' generated/h100_rows.tex) rows"
+[ -f $H ] && python3 $VP/paper_table.py $H --knee gsm8k=14 --emit --columns main --dataset-label "H100" --macros generated/h100_macros.tex --macro-prefix vpHone --saturated gsm8k=$CAP:llama_h100_gsm8k > generated/h100_rows.tex && echo "  H100: $(grep -c '\\\\' generated/h100_rows.tex) rows"
 # 48 GB card: v1.8 measures it on the 256-row ladder with the same-ladder baseline upstream_g256 (D-849 add. 42); v1.7 used upstream_g128
 A6=$AN/rtxa6000/paired_report.upstream_g256__vskipper.json; [ -f $A6 ] || A6=$AN/rtxa6000/paired_report.upstream_g128__vskipper.json
-[ -f $A6 ] && python3 $VP/paper_table.py $A6 --knee gsm8k=$(cat $AN/rtxa6000/qstar.txt) --emit --columns main --dataset-label "RTX A6000" --macros generated/a6000_macros.tex --macro-prefix vpAsix > generated/a6000_rows.tex && echo "  A6000: $(grep -c '\\\\' generated/a6000_rows.tex) rows" || echo "  A6000 row pending"
+[ -f $A6 ] && python3 $VP/paper_table.py $A6 --knee gsm8k=$(cat $AN/rtxa6000/qstar.txt) --emit --columns main --dataset-label "RTX A6000" --macros generated/a6000_macros.tex --macro-prefix vpAsix --saturated gsm8k=$CAP:llama_a6000_gsm8k > generated/a6000_rows.tex && echo "  A6000: $(grep -c '\\\\' generated/a6000_rows.tex) rows" || echo "  A6000 row pending"
 
 say "3b ladders of the transfer devices (preserved rung logs)"
 LH=$EV/h100-500w/ladder/ladder-gsm8k-upstream_g1024; rm -f generated/ladder_h100_rows.tex generated/ladder_h100_macros.tex
@@ -78,10 +84,6 @@ python3 $VP/tile_ratio_table.py --device NVIDIA_A100=A100 --device "NVIDIA_RTX_A
 say "3c hardware-band appendix table (every device's band = the rule's output)"
 A6K=$( [ -f $AN/rtxa6000/qstar.txt ] && cat $AN/rtxa6000/qstar.txt || echo 6 )
 python3 $VP/hardware_bands_table.py --only-used --rows generated/hardware_bands_rows.tex --macros generated/hardware_bands_macros.tex --knee NVIDIA_A100=13 --knee NVIDIA_H100_HBM3=14 --knee NVIDIA_RTX_A6000=$A6K --used NVIDIA_A100,NVIDIA_H100_HBM3,NVIDIA_RTX_A6000 | tail -1
-
-say "3d throughput under saturation at 1.25 x Q* (Table 4): TPS and RPS inside the injection window, from the compact per-cell record"
-[ -f $AN/capacity/capacity_compact.json ] || { echo "  MISSING $AN/capacity/capacity_compact.json"; exit 1; }
-python3 $VP/capacity_window.py emit $AN/capacity/capacity_compact.json generated/ && echo "  $(grep -c '\\\\' generated/capacity_rows.tex) throughput rows"
 
 say "4  ablation (per dataset, from the node's paired reports; arms vdec_fd / vpre_binarycohort / integrated_alwaysskip [/ vskipper_noupgrade, v1.8] vs $BASE)"
 for DSK in "gsm8k:13:" "bbh_cot:34:_bbh_cot" "coqa:25:_coqa"; do IFS=: read -r ADS AK SFX <<< "$DSK"

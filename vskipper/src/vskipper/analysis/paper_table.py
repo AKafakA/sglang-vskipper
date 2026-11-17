@@ -59,6 +59,13 @@ COLUMN_SETS = {
 # them (an older campaign, the served-bank replay) is not refused.
 MACRO_ONLY = ["ITL mean"]
 MULTIPLIERS = (0.75, 0.95, 1.25)
+# Throughput under saturation (capacity_window.py emit: TPS and RPS inside the injection window at 1.25 x Q*) is one
+# measurement per configuration, not per rate (owner, 2026-10-25: Table 4 distributed into the tables of its configurations).
+# --saturated appends two columns, TPS and RPS, after makespan; they are defined only at 1.25 x Q*, so only the
+# configuration's 1.25 x Q* row carries them and its lower-load rows leave both cells empty (owner, 2026-10-28).
+SATURATED = [("TPS", "output_tps_pct"), ("RPS", "completed_rps_pct")]
+SATURATED_AT = 1.25
+MULTIROW_RE = re.compile(r"\\multirow\{(\d+)\}\{\*\}\{([^{}]*)\}")
 DISPLAY = {"gsm8k": "GSM8K", "bbh_cot": "BBH", "coqa": "CoQA", "gsm8k_q4b": "GSM8K", "gsm8k_q8b": "GSM8K"}   # the Qwen rows carry their own dataset keys (v1.6)
 # A LaTeX control sequence is letters ONLY -- \vpTPSGSM8KLow and \vpE2E... are syntax
 # errors, not ugly names. So macro names get their own digit-free map; the TABLE keeps the
@@ -67,11 +74,12 @@ MACRO_DISPLAY = {"gsm8k": "Gsm", "bbh_cot": "Bbh", "coqa": "Coqa", "gsm8k_q4b": 
 
 
 def rate_of(suite: str) -> float:
-    """`gsm8k_eqw_r8p25` -> 8.25. The rate is IN the suite name; never inferred."""
-    match = re.search(r"_r(\d+)p(\d+)$", suite)
+    """`gsm8k_eqw_r8p25` -> 8.25, `gsm8k_eqw_r27` -> 27.0 (an integer rate carries no `p` part). The rate is IN the
+    suite name; never inferred."""
+    match = re.search(r"_r(\d+)(?:p(\d+))?$", suite)
     if not match:
         raise ValueError(f"suite {suite!r} does not end in the _r<rate> form")
-    return float(f"{match.group(1)}.{match.group(2)}")
+    return float(f"{match.group(1)}.{match.group(2) or 0}")
 
 
 def multiplier_of(suite: str, knee: float) -> float:
@@ -119,7 +127,7 @@ GROUP_MARK = "% paper_table group"   # marks a group header this script emitted,
 
 
 def latex_rows(rows: list[dict[str, Any]], columns: list[str] = COLUMNS, n_col: bool = True,
-               group: bool = False, order: list[str] | None = None) -> str:
+               group: bool = False, order: list[str] | None = None, saturated: bool = False) -> str:
     """`group=True` (v1.7 body tables): one italic group header per dataset, rows carry the rate only;
     `order` lists dataset keys in the wanted group order (unlisted datasets follow, alphabetically)."""
     if order:
@@ -132,7 +140,7 @@ def latex_rows(rows: list[dict[str, Any]], columns: list[str] = COLUMNS, n_col: 
         if group and display != current:
             if current is not None:
                 lines.append(r"\midrule")
-            width = len(columns) + 1 + (1 if n_col else 0)
+            width = len(columns) + 1 + (1 if n_col else 0) + (len(SATURATED) if saturated else 0)
             lines.append(f"\\multicolumn{{{width}}}{{l}}{{\\textit{{{display}}}}} \\\\ {GROUP_MARK}")
             current = display
         cells = []
@@ -140,6 +148,9 @@ def latex_rows(rows: list[dict[str, Any]], columns: list[str] = COLUMNS, n_col: 
         for _, mean, half in [by_name[name] for name in columns]:  # in the column set's order
             cells.append(f"{mean:+.1f}" if half is None
                          else f"{mean:+.1f} $\\pm$ {half:.1f}")
+        if saturated:   # TPS and RPS: only the 1.25 x Q* row, where they are defined; empty cells below it
+            at = abs(row["multiplier"] - SATURATED_AT) < 1e-9
+            cells += [f"{mean:+.1f} $\\pm$ {half:.1f}" if at else "" for _, mean, half in row["saturated"]]
         lines.append(
             ("" if group else f"{display} & ")
             + f"${row['multiplier']:g}\\times Q^*$ & " + (f"{row['n']} & " if n_col else "")
@@ -222,6 +233,7 @@ def verify(rows: list[dict[str, Any]], tex: str, tol: float,
     rows of an `ignore` dataset belong to another report and are verified by that report's own call."""
     problems: list[str] = []
     seen: set[tuple[str, float]] = set()
+    sat_seen: set[str] = set()
     placeholder = (placeholder or set()) | (ignore or set())
     expected = {(DISPLAY.get(r["dataset"], r["dataset"]), r["multiplier"]): r for r in rows}
     # Two row shapes: the classic `DS & rate & n & cells` row, and (v1.7 body tables) a rate-only row
@@ -254,7 +266,27 @@ def verify(rows: list[dict[str, Any]], tex: str, tol: float,
         row = expected[key]
         if n_text is not None and int(n_text) != row["n"]:
             problems.append(f"{key}: n={n_text} in main.tex, {row['n']} measured")
+        # saturated cells (--saturated): verified against the configuration's values, then removed so the row's width is
+        # its column set's; a table emitted without them (the tails appendix) does not carry them and is not asked to
+        spans = MULTIROW_RE.findall(cells_text)
+        cells_text = MULTIROW_RE.sub("", cells_text)
+        if spans and row.get("saturated"):
+            sat_seen.add(key[0])
+            if len(spans) != len(row["saturated"]):
+                problems.append(f"{key}: {len(spans)} saturated cells in main.tex, {len(row['saturated'])} measured")
+            for (column, mean, half), (_, text) in zip(row["saturated"], spans):
+                cell = CELL_RE.search(text)
+                if not cell or abs(float(cell.group(1)) - mean) > tol or (cell.group(2) and abs(float(cell.group(2)) - half) > tol):
+                    problems.append(f"{key} {column} (saturated): main.tex {text.strip()!r}, measured {mean:+.1f} +- {half:.1f}")
         found = CELL_RE.findall(cells_text)
+        # TPS and RPS (--saturated): the last two cells of the configuration's 1.25 x Q* row, empty on its other rows
+        if row.get("saturated") and abs(key[1] - SATURATED_AT) < 1e-9 and \
+                any(len(cols) + len(SATURATED) == len(found) for cols in COLUMN_SETS.values()):
+            sat_seen.add(key[0])
+            for (column, mean, half), (tex_mean, tex_half) in zip(row["saturated"], found[-len(SATURATED):]):
+                if abs(float(tex_mean) - mean) > tol or (tex_half and abs(float(tex_half) - half) > tol):
+                    problems.append(f"{key} {column} (saturated): main.tex {tex_mean} +- {tex_half}, measured {mean:+.1f} +- {half:.1f}")
+            found = found[:-len(SATURATED)]
         # The paper carries the same (dataset, rate) row in more than one table (the headline
         # with COLUMN_SETS["main"], the tails appendix with COLUMN_SETS["tails"]); a tex row is
         # checked against the column set whose width it has. A width matching no declared set
@@ -278,6 +310,8 @@ def verify(rows: list[dict[str, Any]], tex: str, tol: float,
     for key in expected:
         if key not in seen:
             problems.append(f"artifacts have row {key} that main.tex does not")
+    for config in sorted({k[0] for k, r in expected.items() if r.get("saturated")} - sat_seen - placeholder):
+        problems.append(f"artifacts have saturated TPS/RPS for {config} that main.tex does not")
     return problems
 
 
@@ -318,6 +352,9 @@ def main() -> int:
                     help="comma-separated dataset keys in the wanted group order, e.g. gsm8k,bbh_cot,coqa")
     ap.add_argument("--columns", default="all", choices=sorted(COLUMN_SETS),
                     help="column set for the emitted rows (macros always cover every column)")
+    ap.add_argument("--saturated", action="append", default=[], metavar="DATASET=CAPACITY_JSON:KEY",
+                    help="append TPS and RPS under saturation (capacity_window.py emit, entry KEY) for DATASET as two columns "
+                         "spanning its rate rows; every dataset in the table needs one; refused unless n matches")
     ap.add_argument("--tol", type=float, default=0.05,
                     help="printed to one decimal, so 0.05 is exact-match at that precision")
     args = ap.parse_args()
@@ -349,6 +386,23 @@ def main() -> int:
         print("REFUSED: the report has no rows", file=sys.stderr)
         return 2
 
+    saturated = {}
+    for entry in args.saturated:
+        dataset, _, rest = entry.partition("=")
+        path, _, key = rest.rpartition(":")
+        cap = json.loads(Path(path).read_text())[key]
+        saturated[dataset] = (cap["n"], [(name, *cap[field]) for name, field in SATURATED])
+    for row in rows:
+        if not saturated:
+            break
+        if row["dataset"] not in saturated:
+            print(f"REFUSED: --saturated gives no value for dataset {row['dataset']!r}", file=sys.stderr)
+            return 2
+        n, values = saturated[row["dataset"]]
+        if n != row["n"]:
+            print(f"REFUSED: --saturated {row['dataset']}: n={n}, its rows have n={row['n']}", file=sys.stderr)
+            return 2
+        row["saturated"] = values
     excluded = {d for d in args.exclude_datasets.split(",") if d}
     placeholder = {DISPLAY.get(d, d) for d in args.placeholder_datasets.split(",") if d}
     table_only = [r for r in rows if r["dataset"] not in excluded]
@@ -358,7 +412,8 @@ def main() -> int:
         table_only = [dict(r, dataset=args.dataset_label) for r in table_only]
     if args.emit:
         print(latex_rows(table_only, COLUMN_SETS[args.columns], n_col=not args.no_n_col,
-                         group=args.group_rows, order=[k for k in args.order.split(",") if k]))
+                         group=args.group_rows, order=[k for k in args.order.split(",") if k],
+                         saturated=bool(saturated)))
         if args.macros:
             args.macros.write_text(macros(rows, args.macro_prefix))
             print(f"\n% wrote {len(rows) * len(COLUMNS)} macros to {args.macros}",

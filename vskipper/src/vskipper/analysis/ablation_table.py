@@ -6,8 +6,8 @@ usage: ablation_table.py --headline generated/paired_report.json --report stock=
 
 One row per (dataset, rate) cell; one column pair per arm (E2E mean delta %, makespan delta %), the headline arm first.
 Every number is the paired report's `mean_pct` (baseline = upstream in the same session); a `ci95_half` is printed only
-for the headline (n = 6), which is the noise floor the single-rep ablation cells are read against. An arm whose report
-lacks a cell prints `--`. Rates are labelled by the knee multiple recovered from the suite name (r10p45 -> 0.95 x 11).
+for the headline (n = 6), which is the noise floor the single-rep ablation cells are read against, and for every arm under
+--arm-ci. An arm whose report lacks a cell prints `--`. Rates are labelled by the knee multiple recovered from the suite name (r10p45 -> 0.95 x 11).
 """
 from __future__ import annotations
 import argparse, json, re, sys
@@ -58,6 +58,7 @@ def main() -> int:
     ap.add_argument("--dataset", default="gsm8k")
     ap.add_argument("--knee", action="append", default=[], help="dataset=Q*")
     ap.add_argument("--metrics", default="mean_e2e_latency_ms,duration")
+    ap.add_argument("--arm-ci", action="store_true", help="print each ablation arm's ci95_half too (arms measured at n >= 2)")
     ap.add_argument("--macro-only-metrics", default="mean_tpot_ms,mean_ttft_ms",
                     help="fields emitted as macros but not as table columns (the prose cites an arm's TPOT/TTFT)")
     ap.add_argument("--rows", type=Path, required=True)
@@ -82,7 +83,7 @@ def main() -> int:
         for name, rep in arms:
             for f in metrics:
                 r = rep.get((a.dataset, suite, f))
-                cells.append(fmt(r, ci=False))
+                cells.append(fmt(r, ci=a.arm_ci))
                 if r is not None and a.macros:
                     mult = multiple(rate, knees[a.dataset])
                     tag = re.sub(r"[^A-Za-z]", "", name.title()) + FIELD.get(f, re.sub(r"[^A-Za-z]", "", f.title())) + WORD.get(mult, "X")

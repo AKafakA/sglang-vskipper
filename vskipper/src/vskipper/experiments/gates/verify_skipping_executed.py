@@ -105,12 +105,28 @@ def skip_and_total(path: Path) -> tuple[int, int, str]:
             "regime_switch.counters.decode (passes) + regime_switch.counters.prefill.fd (passes)"
             + ("" if "prefill" in active else " [prefill not routed by this arm]"),
         )
+    if (vp.get("served_design") or {}).get("coverage_dense") is False:
+        # [owner 2026-11-09] The cohorts-without-graphs control: always-route with the coverage stamp off, so
+        # neither regime_switch nor fd_c3 counts its work. Its routed decode rows are counted by the full-graph
+        # route tape itself, which runs on every one of its (uncaptured) decode passes.
+        routes = ((vp.get("model") or {}).get("flexidepth") or {}).get("full_graph_routes") or {}
+        if "project_rows" not in routes or "run_rows" not in routes:
+            sys.exit(
+                f"FATAL: {path}: the arm declares uncaptured decode (coverage_dense false) but carries no "
+                "model.flexidepth.full_graph_routes counters. Refusing rather than assuming."
+            )
+        project = int(routes["project_rows"])
+        return project, project + int(routes["run_rows"]), "model.flexidepth.full_graph_routes (rows)"
     c3 = vp.get("fd_c3") or {}
     if c3.get("enabled"):
         counts = c3.get("counters") or {}
         skipped = int(counts.get("fd_tokens_skip_body", 0))
         allrun = int(counts.get("fd_tokens_prod_allrun_band", 0))
         return skipped, skipped + allrun, "fd_c3.counters (tokens)"
+    eager = vp.get("eager_decode_routes")
+    if eager is not None:   # the eager control arm: the rows its own body routed
+        project = int(eager.get("project_rows", 0))
+        return project, project + int(eager.get("run_rows", 0)), "eager_decode_routes (rows)"
     sys.exit(
         f"FATAL: {path} has neither an enabled regime_switch nor fd_c3, so no counter "
         "block attests whether the skipper executed. Refusing rather than assuming."

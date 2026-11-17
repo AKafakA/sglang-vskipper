@@ -1,0 +1,24 @@
+{
+ "dataset_rows": {
+  "train": 7473,
+  "test": 1319
+ },
+ "suite_rows": 3600,
+ "suite_by_split": {
+  "train": 2281,
+  "test": 1319
+ },
+ "gold_mismatches": [],
+ "gold_mismatch_count": 0,
+ "fewshot_demo_train_indices": 6778,
+ "pool_size_before_exclusion": 5192,
+ "pool_exact_test_matches": [],
+ "pool_13gram_test_overlaps": 1,
+ "pool_exact_suite_train_matches": [],
+ "pool_size": 5191,
+ "pool_rows_also_used_as_fewshot_demos_in_eval_prompts": 4725,
+ "train_count": 4691,
+ "dev_count": 500,
+ "train_sha256": "22aa155b78ec702ba39753625a0608cb6661f6a3e7acc99952fed2570c3020e2",
+ "dev_sha256": "a79d460cb1044aed9ab4363830b6ccd97453a268db81648accc62881d77d5a45"
+}

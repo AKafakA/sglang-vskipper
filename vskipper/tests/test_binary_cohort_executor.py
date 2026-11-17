@@ -24,6 +24,9 @@ set_global_server_args_for_scheduler(
 from vskipper.kernels.mlp import (
     _binary_cohort_mlp,
 )
+import vskipper.kernels.mlp as _mlp
+
+_mlp._tp_world_size = lambda: 1  # single process, TP1: the cohort body asks the TP group for its size (as test_coverage_dense)
 
 sys.path.insert(0, "vskipper/tests")
 from binary_cohort_reference import reference_binary_cohort_mlp

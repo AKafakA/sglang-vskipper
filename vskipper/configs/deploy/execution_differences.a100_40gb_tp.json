@@ -1,0 +1,91 @@
+{
+ "_comment": "What the TP-feasibility arms EXECUTE differently on the CloudLab A100-SXM4-40GB node (2026-10-24), declared BEFORE any cell (incident-graph-ladder-confound-20260916, rule 1). Same contract as execution_differences.rtxa6000.json plus tp_size: every arm of a campaign must serve at the same TP size (the launch profile paper_tp<N> gives both arms --tp-size N).",
+ "fields_compared": [
+  "decode_ladder_top",
+  "decode_ladder_buckets",
+  "decode_ladder_bs",
+  "decode_graph_backend",
+  "decode_tc_compiler",
+  "prefill_graph_backend",
+  "prefill_graph_bs",
+  "kv_capacity_tokens",
+  "chunked_prefill_size",
+  "mem_fraction_static",
+  "dtype",
+  "attention_backend",
+  "sampling_backend",
+  "decode_kv_band",
+  "tp_size"
+ ],
+ "tolerances": {
+  "kv_capacity_tokens_rel": 0.015,
+  "kv_capacity_tokens_abs": 3856,
+  "_note": "as on the A6000: the treatment's router/projector weights displace ~3,840 K/V tokens (at TP the projector and the K/V heads are both sharded, so the displacement in tokens is unchanged): smoke 2026-10-24 TP2 384,115 vs 380,211 (-1.02 %), TP4 872,318 vs 867,710 (-0.53 %). 2026-10-25: + 16 tokens (2 MiB) for SGLang's own boot-to-boot pool jitter: the same upstream TP1 prefill instance sized 132,747 and 132,748 tokens on two boots (fork 128,907 / 128,908), so the exact 3,840 refused a 3,841-token gap (P/D rep 4, 07:53Z). A smaller treatment pool only ever costs the treatment; a larger one still never passes."
+ },
+ "declared": {
+  "upstream_g512": {
+   "decode_ladder_top": 512,
+   "reason": "same-ladder control at TP2 on this card: upstream + --cuda-graph-max-bs 512 = the fork's (A100-SXM4-40GB, 2) coverage ladder; upstream's default here is 32"
+  },
+  "vskipper_tp2": {
+   "decode_ladder_top": 512,
+   "kv_capacity_tokens": "smaller_ok",
+   "decode_kv_band": "rule",
+   "reason": "served design at TP2: coverage ladder from DECODE_COVERAGE_LADDER_BY_DEVICE_TP; band by the roofline rule with the per-GPU K/V bytes (b/2): 250k/320k; router/projector weights shrink the pool by <1.5 %"
+  },
+  "integrated_alwaysskip_tp2": {
+   "decode_ladder_top": 512,
+   "kv_capacity_tokens": "smaller_ok",
+   "reason": "always-route twin at TP2 (no mode switch, no band)"
+  },
+  "upstream_g1024": {
+   "decode_ladder_top": 1024,
+   "reason": "same-ladder control at TP4 on this card: upstream + --cuda-graph-max-bs 1024 = the fork's (A100-SXM4-40GB, 4) coverage ladder; upstream's default here is 160"
+  },
+  "vskipper_tp4": {
+   "decode_ladder_top": 1024,
+   "kv_capacity_tokens": "smaller_ok",
+   "decode_kv_band": "rule",
+   "reason": "served design at TP4: coverage ladder from DECODE_COVERAGE_LADDER_BY_DEVICE_TP; band by the roofline rule with the per-GPU K/V bytes (b/4): 510k/630k; router/projector weights shrink the pool by <1.5 %"
+  },
+  "integrated_alwaysskip_tp4": {
+   "decode_ladder_top": 1024,
+   "kv_capacity_tokens": "smaller_ok",
+   "reason": "always-route twin at TP4 (no mode switch, no band)"
+  },
+  "upstream_pd_g512": {
+   "decode_ladder_top": 512,
+   "reason": "P/D decode instance (TP2): same-ladder control, upstream + --cuda-graph-max-bs 512 = the fork's (A100-SXM4-40GB, 2) coverage ladder"
+  },
+  "vskipper_pd": {
+   "decode_ladder_top": 512,
+   "kv_capacity_tokens": "smaller_ok",
+   "decode_kv_band": "rule",
+   "reason": "P/D decode instance = the served design at TP2 (vskipper_tp2): coverage ladder 512; band by the rule with per-GPU K/V bytes (250k/320k); router/projector weights shrink the pool by <1.5 %"
+  },
+  "upstream_pd_g512__prefill": {
+   "decode_ladder_top": 32,
+   "reason": "P/D prefill instance (TP1 on GPU 0; owner 2026-10-25 2P1D): never decodes; SGLang's P/D hook disables decode graphs (backend 'disabled', the listed default buckets are never captured)"
+  },
+  "vskipper_pd__prefill": {
+   "decode_ladder_top": null,
+   "decode_ladder_buckets": 0,
+   "decode_ladder_bs": [],
+   "kv_capacity_tokens": "smaller_ok",
+   "decode_kv_band": "rule",
+   "reason": "P/D prefill instance (TP1 on GPU 0, arm vskipper; owner 2026-10-25 2P1D): never decodes, captures no decode graph (decode backend disabled by SGLang's P/D hook); the router/projector weights displace the declared 3,840 K/V tokens; its attested band is the rule's TP1 band (unused: no decode)"
+  },
+  "upstream_pd_g512__prefill_b": {
+   "decode_ladder_top": 32,
+   "reason": "P/D prefill instance (TP1 on GPU 1; owner 2026-10-25 2P1D): never decodes; SGLang's P/D hook disables decode graphs (backend 'disabled', the listed default buckets are never captured)"
+  },
+  "vskipper_pd__prefill_b": {
+   "decode_ladder_top": null,
+   "decode_ladder_buckets": 0,
+   "decode_ladder_bs": [],
+   "kv_capacity_tokens": "smaller_ok",
+   "decode_kv_band": "rule",
+   "reason": "P/D prefill instance (TP1 on GPU 1, arm vskipper; owner 2026-10-25 2P1D): never decodes, captures no decode graph (decode backend disabled by SGLang's P/D hook); the router/projector weights displace the declared 3,840 K/V tokens; its attested band is the rule's TP1 band (unused: no decode)"
+  }
+ }
+}

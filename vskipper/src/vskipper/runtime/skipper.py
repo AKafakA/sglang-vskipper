@@ -44,6 +44,7 @@ from vskipper.runtime.env import (
 )
 from vskipper.runtime.env import (
     DETERMINISTIC_MOCK_FULL_GRAPH_SKIPPER,
+    POSITION_DECAY_FULL_GRAPH_SKIPPER,
     FLEXIDEPTH_FULL_GRAPH_SKIPPER,
     FULL_GRAPH_SKIPPER_ENV,
 )
@@ -373,6 +374,130 @@ class DeterministicMockFullGraphAdapter(FullGraphSkipperAdapter):
             "execution_storage": "bool_run_mask",
             "unsupported_actions": ["reuse", "skip_attn", "skip_mlp", "veto"],
         }
+class PositionDecayFullGraphAdapter(FullGraphSkipperAdapter):
+    """D³ (Fan et al., Findings of ACL 2025): depth decays with the generated token's position.
+
+    An independently published, training-free policy: no router, no adapter, and a decision
+    that depends on the token's position only. Generated token T_i keeps
+    ``floor(L * alpha ** i)`` layers and drops the contiguous range ``[start, start + L - keep)``,
+    clamped at the last layer, where i counts generated tokens and the prompt runs full depth.
+    A dropped layer passes the hidden state unchanged. The authors publish no code, so this is
+    our reading of their rule. Decode only.
+
+    Identity pass-through: every row carries branch weight 1.0. A RUN row then runs
+    ``mlp(hidden) * 1`` as dense does, and a Project-Only row's projector output is multiplied
+    by ``1 - 1``, so the row's hidden state passes unchanged. Project-Only also writes the
+    row's own K/V, which D³ never reads back: ``keep`` never rises.
+    """
+
+    name = POSITION_DECAY_FULL_GRAPH_SKIPPER
+    supported_actions = frozenset(
+        (LogicalAction.RUN, LogicalAction.PROJECT_ONLY)
+    )
+    requires_router_weights = False
+    requires_prompt_lens = True
+    projector_kind = FLEXIDEPTH_PROJECTOR
+    payload_semantics = "run=mlp(hidden)*1;project_only=hidden"
+
+    def __init__(self, *, alpha: float, start_fraction: float, num_layers: int) -> None:
+        if not 0.0 < alpha < 1.0:
+            raise ValueError("position_decay alpha must be in (0, 1)")
+        if not 0.0 <= start_fraction < 1.0:
+            raise ValueError("position_decay start_fraction must be in [0, 1)")
+        self.alpha = alpha
+        self.start_fraction = start_fraction
+        self.num_layers = int(num_layers)
+        self.start_layer = int(start_fraction * self.num_layers)
+
+    def prepare_batch(
+        self,
+        *,
+        hidden_states: Any,
+        request_ids: Any,
+        token_epochs: Any,
+        valid_rows: Any,
+        route_layer_order: tuple[int, ...],
+        request_slots: Any = None,
+        phase: Optional[str] = None,
+        batch_request_ids: Any = None,
+        batch_request_slots: Any = None,
+        prompt_lens: Any = None,
+    ) -> "PositionDecayBatchState":
+        del request_ids, request_slots, phase, batch_request_ids, batch_request_slots
+        import torch
+
+        if self.start_layer not in route_layer_order:
+            raise RuntimeError(
+                f"position_decay starts at layer {self.start_layer}, outside the routed "
+                f"layers {route_layer_order[0]}..{route_layer_order[-1]}"
+            )
+        if prompt_lens is None or tuple(prompt_lens.shape) != (hidden_states.shape[0],):
+            raise RuntimeError("position_decay prompt lengths do not match routed rows")
+        generated = torch.clamp(token_epochs + 1 - prompt_lens, min=0).to(torch.float64)
+        # a device fill: a host tensor copied to the device here would break graph capture
+        keep = torch.floor(
+            self.num_layers * torch.pow(torch.full_like(generated, self.alpha), generated)
+        ).to(torch.int64)
+        upper = torch.clamp(self.start_layer + self.num_layers - keep, max=self.num_layers)
+        return PositionDecayBatchState(
+            upper=upper,
+            valid_rows=valid_rows,
+            branch_weights=torch.ones(
+                (hidden_states.shape[0], 1), dtype=hidden_states.dtype, device=hidden_states.device
+            ),
+        )
+
+    def route(
+        self,
+        hidden_states: Any,
+        *,
+        router: Any,
+        forced_action: Optional[LogicalAction] = None,
+        layer_id: Optional[int] = None,
+        batch_state: Any = None,
+    ) -> FullGraphActionBatch:
+        del hidden_states, router
+        if forced_action is not None:
+            raise ValueError("position_decay does not support forced routes")
+        if layer_id is None:
+            raise RuntimeError("position_decay requires a physical layer ID")
+        if not isinstance(batch_state, PositionDecayBatchState):
+            raise RuntimeError("position_decay batch state is missing")
+        dropped = (layer_id >= self.start_layer) & (layer_id < batch_state.upper)
+        return FullGraphActionBatch(
+            adapter_name=self.name,
+            branch_weights=batch_state.branch_weights,
+            supported_actions=self.supported_actions,
+            explicit_run_mask=(~(dropped & batch_state.valid_rows)).view(-1, 1),
+            payload_semantics=self.payload_semantics,
+        )
+
+    def attestation(self) -> dict[str, Any]:
+        return {
+            "name": self.name,
+            "contract": FULL_GRAPH_ACTION_CONTRACT,
+            "logical_action_codes": dict(_LOGICAL_ACTION_CODES),
+            "supported_actions": ["run", "project_only"],
+            "decision_granularity": "generated_token_position_then_layer",
+            "decision": "floor_l_alpha_pow_i",
+            "alpha": self.alpha,
+            "start_fraction": self.start_fraction,
+            "start_layer": self.start_layer,
+            "num_layers": self.num_layers,
+            "continuous_payload": "binary_branch_weight",
+            "payload_semantics": self.payload_semantics,
+            "state_semantics": "own_layer_kv_materialized_for_every_action",
+            "requires_stable_request_ids": self.requires_stable_request_ids,
+            "execution_storage": "bool_run_mask",
+            "unsupported_actions": ["reuse", "skip_attn", "skip_mlp", "veto"],
+        }
+@dataclass(frozen=True, slots=True)
+class PositionDecayBatchState:
+    """Device tensors shared by every layer of one D³ batch."""
+
+    upper: Any
+    valid_rows: Any
+    branch_weights: Any
 @dataclass(frozen=True, slots=True)
 class DeterministicMockBatchState:
     """Device tensors shared by every layer in one deterministic mock batch."""
@@ -430,9 +555,18 @@ def _build_deterministic_mock(arm: Mapping[str, Any]) -> FullGraphSkipperAdapter
     )
 
 
+def _build_position_decay(arm: Mapping[str, Any]) -> FullGraphSkipperAdapter:
+    return PositionDecayFullGraphAdapter(
+        alpha=float(arm["d3_alpha"]),
+        start_fraction=float(arm["d3_start_fraction"]),
+        num_layers=int(arm["d3_num_layers"]),
+    )
+
+
 _SKIPPERS: dict[str, SkipperFactory] = {
     FLEXIDEPTH_FULL_GRAPH_SKIPPER: _build_flexidepth,
     DETERMINISTIC_MOCK_FULL_GRAPH_SKIPPER: _build_deterministic_mock,
+    POSITION_DECAY_FULL_GRAPH_SKIPPER: _build_position_decay,
 }
 
 

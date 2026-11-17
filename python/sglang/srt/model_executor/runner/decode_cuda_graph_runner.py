@@ -103,6 +103,7 @@ from sglang.srt.utils import (
     require_mlp_tp_gather,
 )
 from sglang.srt.utils.profile_utils import export_cuda_graph_capture_trace
+from vskipper.runtime.config import full_graph_policy_prompt_lens_required
 from vskipper.runtime.coverage import (
     record_recapture_event,
     vp_graph_lifecycle_mark,
@@ -423,6 +424,12 @@ class DecodeCudaGraphRunner(BaseCudaGraphRunner):
         self._vp_force_run_rows = (
             torch.zeros(self.max_bs, dtype=torch.bool, device=self.model_runner.device)
             if self._vp_fill_num_token_non_padded
+            else None
+        )
+        # Static per-row replay input for a policy that reads prompt lengths (D³).
+        self._vp_prompt_lens = (
+            torch.zeros(self.max_bs, dtype=torch.int64, device=self.model_runner.device)
+            if full_graph_policy_prompt_lens_required()
             else None
         )
 
@@ -748,6 +755,8 @@ class DecodeCudaGraphRunner(BaseCudaGraphRunner):
 
         if self._vp_force_run_rows is not None:
             forward_batch.fd_full_graph_force_run_rows = self._vp_force_run_rows[:bs]
+        if self._vp_prompt_lens is not None:
+            forward_batch.fd_full_graph_prompt_lens = self._vp_prompt_lens[:bs]
 
         # Trip the coordinator so the hisparse code path is captured into the
         # graph; backends read it from self.model_runner.hisparse_coordinator.
@@ -1056,6 +1065,8 @@ class DecodeCudaGraphRunner(BaseCudaGraphRunner):
         pre-planned), because the model runner sets the mask just before
         dispatch."""
 
+        if self._vp_prompt_lens is not None:
+            self._vp_prompt_lens[:raw_bs].copy_(forward_batch.fd_full_graph_prompt_lens)
         if self._vp_force_run_rows is None:
             return
         force = forward_batch.fd_full_graph_force_run_rows

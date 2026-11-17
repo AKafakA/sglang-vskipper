@@ -1,0 +1,522 @@
+{
+ "gateup@205": {
+  "cublas_ms": 0.1404,
+  "best_ms": 0.1307,
+  "ratio": 0.93,
+  "config": [
+   32,
+   256,
+   64,
+   8,
+   3
+  ],
+  "tuner": "tune_count_gemm_tiles.py on NVIDIA A100-SXM4-40GB (108 SMs, smem/block 166912 B), TP4 shard K=4096 N=7168, BLOCK_K held at 64, torch.equal-gated vs the carried config; 52 candidates; carried [64, 128, 64, 4, 3] 0.139 ms -> [32, 256, 64, 8, 3] 0.131 ms (replaced, gain +5.8 %)"
+ },
+ "gateup@512": {
+  "cublas_ms": 0.1888,
+  "best_ms": 0.1764,
+  "ratio": 0.935,
+  "config": [
+   64,
+   128,
+   64,
+   4,
+   3
+  ],
+  "tuner": "tune_count_gemm_tiles.py on NVIDIA A100-SXM4-40GB (108 SMs, smem/block 166912 B), TP4 shard K=4096 N=7168, BLOCK_K held at 64, torch.equal-gated vs the carried config; 52 candidates; carried [64, 256, 64, 4, 3] 0.194 ms -> [64, 128, 64, 4, 3] 0.176 ms (replaced, gain +9.1 %)"
+ },
+ "gateup@1024": {
+  "cublas_ms": 0.3181,
+  "best_ms": 0.3214,
+  "ratio": 1.01,
+  "config": [
+   128,
+   128,
+   32,
+   4,
+   3
+  ],
+  "tuner": "tune_count_gemm_tiles.py on NVIDIA A100-SXM4-40GB (108 SMs, smem/block 166912 B), TP4 shard K=4096 N=7168, BLOCK_K held at 32, torch.equal-gated vs the carried config; 53 candidates; carried [128, 128, 32, 4, 3] 0.321 ms -> [128, 128, 32, 4, 3] 0.321 ms (kept, gain +0.0 %)"
+ },
+ "gateup@2048": {
+  "cublas_ms": 0.5403,
+  "best_ms": 0.5593,
+  "ratio": 1.035,
+  "config": [
+   128,
+   128,
+   32,
+   4,
+   3
+  ],
+  "tuner": "tune_count_gemm_tiles.py on NVIDIA A100-SXM4-40GB (108 SMs, smem/block 166912 B), TP4 shard K=4096 N=7168, BLOCK_K held at 32, torch.equal-gated vs the carried config; 53 candidates; carried [128, 128, 32, 4, 3] 0.559 ms -> [128, 128, 32, 4, 3] 0.559 ms (kept, gain +0.0 %)"
+ },
+ "gateup@4096": {
+  "cublas_ms": 1.0377,
+  "best_ms": 1.091,
+  "ratio": 1.051,
+  "config": [
+   128,
+   128,
+   32,
+   4,
+   3
+  ],
+  "tuner": "tune_count_gemm_tiles.py on NVIDIA A100-SXM4-40GB (108 SMs, smem/block 166912 B), TP4 shard K=4096 N=7168, BLOCK_K held at 32, torch.equal-gated vs the carried config; 53 candidates; carried [128, 128, 32, 4, 3] 1.091 ms -> [128, 128, 32, 4, 3] 1.091 ms (kept, gain +0.0 %)"
+ },
+ "down@205": {
+  "cublas_ms": 0.0523,
+  "best_ms": 0.0674,
+  "ratio": 1.288,
+  "config": [
+   32,
+   128,
+   64,
+   4,
+   3
+  ],
+  "tuner": "tune_count_gemm_tiles.py on NVIDIA A100-SXM4-40GB (108 SMs, smem/block 166912 B), TP4 shard K=3584 N=4096, BLOCK_K held at 64, torch.equal-gated vs the carried config; 52 candidates; carried [32, 128, 64, 4, 4] 0.090 ms -> [32, 128, 64, 4, 3] 0.067 ms (replaced, gain +25.1 %)"
+ },
+ "down@512": {
+  "cublas_ms": 0.0785,
+  "best_ms": 0.099,
+  "ratio": 1.261,
+  "config": [
+   64,
+   128,
+   64,
+   4,
+   3
+  ],
+  "tuner": "tune_count_gemm_tiles.py on NVIDIA A100-SXM4-40GB (108 SMs, smem/block 166912 B), TP4 shard K=3584 N=4096, BLOCK_K held at 64, torch.equal-gated vs the carried config; 52 candidates; carried [64, 128, 64, 4, 4] 0.105 ms -> [64, 128, 64, 4, 3] 0.099 ms (replaced, gain +5.3 %)"
+ },
+ "down@1024": {
+  "cublas_ms": 0.1498,
+  "best_ms": 0.1676,
+  "ratio": 1.119,
+  "config": [
+   64,
+   128,
+   64,
+   4,
+   4
+  ],
+  "tuner": "tune_count_gemm_tiles.py on NVIDIA A100-SXM4-40GB (108 SMs, smem/block 166912 B), TP4 shard K=3584 N=4096, BLOCK_K held at 64, torch.equal-gated vs the carried config; 52 candidates; carried [64, 128, 64, 4, 4] 0.168 ms -> [64, 128, 64, 4, 4] 0.168 ms (kept, gain +1.6 %)"
+ },
+ "down@2048": {
+  "cublas_ms": 0.2297,
+  "best_ms": 0.2834,
+  "ratio": 1.234,
+  "config": [
+   64,
+   256,
+   64,
+   4,
+   3
+  ],
+  "tuner": "tune_count_gemm_tiles.py on NVIDIA A100-SXM4-40GB (108 SMs, smem/block 166912 B), TP4 shard K=3584 N=4096, BLOCK_K held at 64, torch.equal-gated vs the carried config; 51 candidates; carried [64, 256, 64, 4, 3] 0.283 ms -> [64, 256, 64, 4, 3] 0.283 ms (kept, gain +0.0 %)"
+ },
+ "down@4096": {
+  "cublas_ms": 0.4795,
+  "best_ms": 0.5317,
+  "ratio": 1.109,
+  "config": [
+   128,
+   128,
+   32,
+   4,
+   3
+  ],
+  "tuner": "tune_count_gemm_tiles.py on NVIDIA A100-SXM4-40GB (108 SMs, smem/block 166912 B), TP4 shard K=3584 N=4096, BLOCK_K held at 32, torch.equal-gated vs the carried config; 53 candidates; carried [128, 128, 32, 4, 3] 0.532 ms -> [128, 128, 32, 4, 3] 0.532 ms (kept, gain +0.0 %)"
+ },
+ "gateup@4608": {
+  "cublas_ms": 1.1614,
+  "best_ms": 1.2375,
+  "ratio": 1.065,
+  "config": [
+   128,
+   128,
+   32,
+   4,
+   3
+  ],
+  "tuner": "tune_count_gemm_tiles.py on NVIDIA A100-SXM4-40GB (108 SMs, smem/block 166912 B), TP4 shard K=4096 N=7168, BLOCK_K held at 32, torch.equal-gated vs the carried config; 53 candidates; carried [128, 128, 32, 4, 3] 1.237 ms -> [128, 128, 32, 4, 3] 1.237 ms (kept, gain +0.0 %)"
+ },
+ "gateup@5120": {
+  "cublas_ms": 1.3016,
+  "best_ms": 1.3016,
+  "ratio": 1.0,
+  "config": [
+   128,
+   128,
+   32,
+   4,
+   3
+  ],
+  "tuner": "tune_count_gemm_tiles.py on NVIDIA A100-SXM4-40GB (108 SMs, smem/block 166912 B), TP4 shard K=4096 N=7168, BLOCK_K held at 32, torch.equal-gated vs the carried config; 53 candidates; carried [128, 128, 32, 4, 3] 1.302 ms -> [128, 128, 32, 4, 3] 1.302 ms (kept, gain +0.0 %)"
+ },
+ "gateup@6144": {
+  "cublas_ms": 1.5477,
+  "best_ms": 1.5706,
+  "ratio": 1.015,
+  "config": [
+   128,
+   128,
+   32,
+   4,
+   3
+  ],
+  "tuner": "tune_count_gemm_tiles.py on NVIDIA A100-SXM4-40GB (108 SMs, smem/block 166912 B), TP4 shard K=4096 N=7168, BLOCK_K held at 32, torch.equal-gated vs the carried config; 53 candidates; carried [128, 128, 32, 4, 3] 1.571 ms -> [128, 128, 32, 4, 3] 1.571 ms (kept, gain +0.0 %)"
+ },
+ "gateup@7168": {
+  "cublas_ms": 1.8186,
+  "best_ms": 1.9345,
+  "ratio": 1.064,
+  "config": [
+   128,
+   128,
+   32,
+   4,
+   3
+  ],
+  "tuner": "tune_count_gemm_tiles.py on NVIDIA A100-SXM4-40GB (108 SMs, smem/block 166912 B), TP4 shard K=4096 N=7168, BLOCK_K held at 32, torch.equal-gated vs the carried config; 53 candidates; carried [128, 128, 32, 4, 3] 1.934 ms -> [128, 128, 32, 4, 3] 1.934 ms (kept, gain +0.0 %)"
+ },
+ "gateup@8192": {
+  "cublas_ms": 2.0663,
+  "best_ms": 2.2457,
+  "ratio": 1.087,
+  "config": [
+   128,
+   128,
+   32,
+   4,
+   3
+  ],
+  "tuner": "tune_count_gemm_tiles.py on NVIDIA A100-SXM4-40GB (108 SMs, smem/block 166912 B), TP4 shard K=4096 N=7168, BLOCK_K held at 32, torch.equal-gated vs the carried config; 53 candidates; carried [128, 128, 32, 4, 3] 2.246 ms -> [128, 128, 32, 4, 3] 2.246 ms (kept, gain +0.0 %)"
+ },
+ "down@4608": {
+  "cublas_ms": 0.5763,
+  "best_ms": 0.6146,
+  "ratio": 1.066,
+  "config": [
+   128,
+   128,
+   32,
+   4,
+   4
+  ],
+  "tuner": "tune_count_gemm_tiles.py on NVIDIA A100-SXM4-40GB (108 SMs, smem/block 166912 B), TP4 shard K=3584 N=4096, BLOCK_K held at 32, torch.equal-gated vs the carried config; 53 candidates; carried [128, 128, 32, 4, 3] 0.634 ms -> [128, 128, 32, 4, 4] 0.615 ms (replaced, gain +3.1 %)"
+ },
+ "down@5120": {
+  "cublas_ms": 0.6789,
+  "best_ms": 0.6478,
+  "ratio": 0.954,
+  "config": [
+   128,
+   128,
+   32,
+   4,
+   3
+  ],
+  "tuner": "tune_count_gemm_tiles.py on NVIDIA A100-SXM4-40GB (108 SMs, smem/block 166912 B), TP4 shard K=3584 N=4096, BLOCK_K held at 32, torch.equal-gated vs the carried config; 53 candidates; carried [128, 128, 32, 4, 3] 0.648 ms -> [128, 128, 32, 4, 3] 0.648 ms (kept, gain +0.0 %)"
+ },
+ "down@6144": {
+  "cublas_ms": 0.8242,
+  "best_ms": 0.8347,
+  "ratio": 1.013,
+  "config": [
+   128,
+   128,
+   32,
+   4,
+   3
+  ],
+  "tuner": "tune_count_gemm_tiles.py on NVIDIA A100-SXM4-40GB (108 SMs, smem/block 166912 B), TP4 shard K=3584 N=4096, BLOCK_K held at 32, torch.equal-gated vs the carried config; 53 candidates; carried [128, 128, 32, 4, 3] 0.835 ms -> [128, 128, 32, 4, 3] 0.835 ms (kept, gain +0.0 %)"
+ },
+ "down@7168": {
+  "cublas_ms": 0.951,
+  "best_ms": 0.9641,
+  "ratio": 1.014,
+  "config": [
+   128,
+   128,
+   32,
+   4,
+   3
+  ],
+  "tuner": "tune_count_gemm_tiles.py on NVIDIA A100-SXM4-40GB (108 SMs, smem/block 166912 B), TP4 shard K=3584 N=4096, BLOCK_K held at 32, torch.equal-gated vs the carried config; 53 candidates; carried [128, 128, 32, 4, 3] 0.964 ms -> [128, 128, 32, 4, 3] 0.964 ms (kept, gain +0.0 %)"
+ },
+ "down@8192": {
+  "cublas_ms": 0.9646,
+  "best_ms": 1.031,
+  "ratio": 1.069,
+  "config": [
+   128,
+   128,
+   32,
+   4,
+   3
+  ],
+  "tuner": "tune_count_gemm_tiles.py on NVIDIA A100-SXM4-40GB (108 SMs, smem/block 166912 B), TP4 shard K=3584 N=4096, BLOCK_K held at 32, torch.equal-gated vs the carried config; 53 candidates; carried [128, 128, 32, 4, 3] 1.031 ms -> [128, 128, 32, 4, 3] 1.031 ms (kept, gain +0.0 %)"
+ },
+ "projgd@205": {
+  "cublas_ms": 0.0183,
+  "best_ms": 0.024,
+  "ratio": 1.31,
+  "config": [
+   32,
+   64,
+   64,
+   8,
+   3
+  ],
+  "tuner": "tune_count_gemm_tiles.py on NVIDIA A100-SXM4-40GB (108 SMs, smem/block 166912 B), TP4 shard K=4096 N=448, BLOCK_K held at 64, torch.equal-gated vs the carried config; 52 candidates; carried [32, 128, 64, 4, 3] 0.033 ms -> [32, 64, 64, 8, 3] 0.024 ms (replaced, gain +26.8 %)"
+ },
+ "projgd@512": {
+  "cublas_ms": 0.0222,
+  "best_ms": 0.0313,
+  "ratio": 1.411,
+  "config": [
+   64,
+   64,
+   64,
+   4,
+   3
+  ],
+  "tuner": "tune_count_gemm_tiles.py on NVIDIA A100-SXM4-40GB (108 SMs, smem/block 166912 B), TP4 shard K=4096 N=448, BLOCK_K held at 64, torch.equal-gated vs the carried config; 52 candidates; carried [128, 32, 64, 4, 4] 0.038 ms -> [64, 64, 64, 4, 3] 0.031 ms (replaced, gain +17.1 %)"
+ },
+ "projgd@1024": {
+  "cublas_ms": 0.0325,
+  "best_ms": 0.0526,
+  "ratio": 1.619,
+  "config": [
+   32,
+   64,
+   32,
+   4,
+   4
+  ],
+  "tuner": "tune_count_gemm_tiles.py on NVIDIA A100-SXM4-40GB (108 SMs, smem/block 166912 B), TP4 shard K=4096 N=448, BLOCK_K held at 32, torch.equal-gated vs the carried config; 54 candidates; carried [64, 256, 32, 4, 3] 0.085 ms -> [32, 64, 32, 4, 4] 0.053 ms (replaced, gain +37.9 %)"
+ },
+ "projgd@2048": {
+  "cublas_ms": 0.0521,
+  "best_ms": 0.0727,
+  "ratio": 1.394,
+  "config": [
+   64,
+   64,
+   32,
+   4,
+   4
+  ],
+  "tuner": "tune_count_gemm_tiles.py on NVIDIA A100-SXM4-40GB (108 SMs, smem/block 166912 B), TP4 shard K=4096 N=448, BLOCK_K held at 32, torch.equal-gated vs the carried config; 54 candidates; carried [128, 64, 32, 4, 3] 0.086 ms -> [64, 64, 32, 4, 4] 0.073 ms (replaced, gain +15.2 %)"
+ },
+ "projgd@4096": {
+  "cublas_ms": 0.0791,
+  "best_ms": 0.1171,
+  "ratio": 1.48,
+  "config": [
+   64,
+   128,
+   32,
+   4,
+   4
+  ],
+  "tuner": "tune_count_gemm_tiles.py on NVIDIA A100-SXM4-40GB (108 SMs, smem/block 166912 B), TP4 shard K=4096 N=448, BLOCK_K held at 32, torch.equal-gated vs the carried config; 54 candidates; carried [64, 128, 32, 4, 3] 0.123 ms -> [64, 128, 32, 4, 4] 0.117 ms (replaced, gain +5.0 %)"
+ },
+ "projgd@4608": {
+  "cublas_ms": 0.1329,
+  "best_ms": 0.1176,
+  "ratio": 0.885,
+  "config": [
+   64,
+   128,
+   32,
+   4,
+   4
+  ],
+  "tuner": "tune_count_gemm_tiles.py on NVIDIA A100-SXM4-40GB (108 SMs, smem/block 166912 B), TP4 shard K=4096 N=448, BLOCK_K held at 32, torch.equal-gated vs the carried config; 53 candidates; carried [64, 128, 32, 4, 4] 0.118 ms -> [64, 128, 32, 4, 4] 0.118 ms (kept, gain +0.0 %)"
+ },
+ "projgd@5120": {
+  "cublas_ms": 0.0922,
+  "best_ms": 0.1242,
+  "ratio": 1.347,
+  "config": [
+   64,
+   128,
+   32,
+   4,
+   3
+  ],
+  "tuner": "tune_count_gemm_tiles.py on NVIDIA A100-SXM4-40GB (108 SMs, smem/block 166912 B), TP4 shard K=4096 N=448, BLOCK_K held at 32, torch.equal-gated vs the carried config; 53 candidates; carried [64, 128, 32, 4, 3] 0.124 ms -> [64, 128, 32, 4, 3] 0.124 ms (kept, gain +2.9 %)"
+ },
+ "projgd@6144": {
+  "cublas_ms": 0.119,
+  "best_ms": 0.1393,
+  "ratio": 1.17,
+  "config": [
+   64,
+   256,
+   32,
+   4,
+   4
+  ],
+  "tuner": "tune_count_gemm_tiles.py on NVIDIA A100-SXM4-40GB (108 SMs, smem/block 166912 B), TP4 shard K=4096 N=448, BLOCK_K held at 32, torch.equal-gated vs the carried config; 54 candidates; carried [128, 128, 32, 4, 3] 0.145 ms -> [64, 256, 32, 4, 4] 0.139 ms (replaced, gain +4.1 %)"
+ },
+ "projgd@7168": {
+  "cublas_ms": 0.1453,
+  "best_ms": 0.1628,
+  "ratio": 1.12,
+  "config": [
+   128,
+   64,
+   32,
+   4,
+   4
+  ],
+  "tuner": "tune_count_gemm_tiles.py on NVIDIA A100-SXM4-40GB (108 SMs, smem/block 166912 B), TP4 shard K=4096 N=448, BLOCK_K held at 32, torch.equal-gated vs the carried config; 54 candidates; carried [128, 128, 32, 4, 3] 0.262 ms -> [128, 64, 32, 4, 4] 0.163 ms (replaced, gain +37.9 %)"
+ },
+ "projgd@8192": {
+  "cublas_ms": 0.1471,
+  "best_ms": 0.189,
+  "ratio": 1.285,
+  "config": [
+   64,
+   128,
+   32,
+   4,
+   4
+  ],
+  "tuner": "tune_count_gemm_tiles.py on NVIDIA A100-SXM4-40GB (108 SMs, smem/block 166912 B), TP4 shard K=4096 N=448, BLOCK_K held at 32, torch.equal-gated vs the carried config; 53 candidates; carried [64, 128, 32, 4, 3] 0.199 ms -> [64, 128, 32, 4, 4] 0.189 ms (replaced, gain +4.8 %)"
+ },
+ "projup@205": {
+  "cublas_ms": 0.0147,
+  "best_ms": 0.0214,
+  "ratio": 1.453,
+  "config": [
+   32,
+   64,
+   64,
+   4,
+   4
+  ],
+  "tuner": "tune_count_gemm_tiles.py on NVIDIA A100-SXM4-40GB (108 SMs, smem/block 166912 B), TP4 shard K=224 N=4096, BLOCK_K held at 64, torch.equal-gated vs the carried config; 52 candidates; carried [32, 256, 64, 8, 4] 0.022 ms -> [32, 64, 64, 4, 4] 0.021 ms (replaced, gain +3.2 %)"
+ },
+ "projup@512": {
+  "cublas_ms": 0.0188,
+  "best_ms": 0.0206,
+  "ratio": 1.092,
+  "config": [
+   128,
+   64,
+   64,
+   4,
+   3
+  ],
+  "tuner": "tune_count_gemm_tiles.py on NVIDIA A100-SXM4-40GB (108 SMs, smem/block 166912 B), TP4 shard K=224 N=4096, BLOCK_K held at 64, torch.equal-gated vs the carried config; 52 candidates; carried [128, 128, 64, 8, 3] 0.022 ms -> [128, 64, 64, 4, 3] 0.021 ms (replaced, gain +5.9 %)"
+ },
+ "projup@1024": {
+  "cublas_ms": 0.0259,
+  "best_ms": 0.0209,
+  "ratio": 0.808,
+  "config": [
+   64,
+   128,
+   64,
+   4,
+   3
+  ],
+  "tuner": "tune_count_gemm_tiles.py on NVIDIA A100-SXM4-40GB (108 SMs, smem/block 166912 B), TP4 shard K=224 N=4096, BLOCK_K held at 64, torch.equal-gated vs the carried config; 52 candidates; carried [64, 128, 64, 8, 3] 0.029 ms -> [64, 128, 64, 4, 3] 0.021 ms (replaced, gain +27.6 %)"
+ },
+ "projup@2048": {
+  "cublas_ms": 0.0296,
+  "best_ms": 0.0342,
+  "ratio": 1.156,
+  "config": [
+   64,
+   128,
+   64,
+   4,
+   3
+  ],
+  "tuner": "tune_count_gemm_tiles.py on NVIDIA A100-SXM4-40GB (108 SMs, smem/block 166912 B), TP4 shard K=224 N=4096, BLOCK_K held at 64, torch.equal-gated vs the carried config; 51 candidates; carried [64, 128, 64, 4, 3] 0.034 ms -> [64, 128, 64, 4, 3] 0.034 ms (kept, gain +2.2 %)"
+ },
+ "projup@4096": {
+  "cublas_ms": 0.0508,
+  "best_ms": 0.0515,
+  "ratio": 1.014,
+  "config": [
+   128,
+   128,
+   32,
+   4,
+   3
+  ],
+  "tuner": "tune_count_gemm_tiles.py on NVIDIA A100-SXM4-40GB (108 SMs, smem/block 166912 B), TP4 shard K=224 N=4096, BLOCK_K held at 32, torch.equal-gated vs the carried config; 53 candidates; carried [128, 128, 32, 4, 3] 0.052 ms -> [128, 128, 32, 4, 3] 0.052 ms (kept, gain +0.0 %)"
+ },
+ "projup@4608": {
+  "cublas_ms": 0.0559,
+  "best_ms": 0.0564,
+  "ratio": 1.009,
+  "config": [
+   128,
+   128,
+   32,
+   4,
+   3
+  ],
+  "tuner": "tune_count_gemm_tiles.py on NVIDIA A100-SXM4-40GB (108 SMs, smem/block 166912 B), TP4 shard K=224 N=4096, BLOCK_K held at 32, torch.equal-gated vs the carried config; 53 candidates; carried [128, 128, 32, 4, 3] 0.056 ms -> [128, 128, 32, 4, 3] 0.056 ms (kept, gain +0.0 %)"
+ },
+ "projup@5120": {
+  "cublas_ms": 0.0601,
+  "best_ms": 0.0613,
+  "ratio": 1.02,
+  "config": [
+   128,
+   128,
+   32,
+   4,
+   3
+  ],
+  "tuner": "tune_count_gemm_tiles.py on NVIDIA A100-SXM4-40GB (108 SMs, smem/block 166912 B), TP4 shard K=224 N=4096, BLOCK_K held at 32, torch.equal-gated vs the carried config; 53 candidates; carried [128, 128, 32, 4, 3] 0.061 ms -> [128, 128, 32, 4, 3] 0.061 ms (kept, gain +0.0 %)"
+ },
+ "projup@6144": {
+  "cublas_ms": 0.0724,
+  "best_ms": 0.0722,
+  "ratio": 0.997,
+  "config": [
+   128,
+   128,
+   32,
+   4,
+   3
+  ],
+  "tuner": "tune_count_gemm_tiles.py on NVIDIA A100-SXM4-40GB (108 SMs, smem/block 166912 B), TP4 shard K=224 N=4096, BLOCK_K held at 32, torch.equal-gated vs the carried config; 53 candidates; carried [128, 128, 32, 4, 3] 0.072 ms -> [128, 128, 32, 4, 3] 0.072 ms (kept, gain +0.0 %)"
+ },
+ "projup@7168": {
+  "cublas_ms": 0.082,
+  "best_ms": 0.0826,
+  "ratio": 1.008,
+  "config": [
+   128,
+   128,
+   32,
+   4,
+   3
+  ],
+  "tuner": "tune_count_gemm_tiles.py on NVIDIA A100-SXM4-40GB (108 SMs, smem/block 166912 B), TP4 shard K=224 N=4096, BLOCK_K held at 32, torch.equal-gated vs the carried config; 53 candidates; carried [128, 128, 32, 4, 3] 0.083 ms -> [128, 128, 32, 4, 3] 0.083 ms (kept, gain +0.0 %)"
+ },
+ "projup@8192": {
+  "cublas_ms": 0.0913,
+  "best_ms": 0.0928,
+  "ratio": 1.017,
+  "config": [
+   128,
+   128,
+   32,
+   4,
+   3
+  ],
+  "tuner": "tune_count_gemm_tiles.py on NVIDIA A100-SXM4-40GB (108 SMs, smem/block 166912 B), TP4 shard K=224 N=4096, BLOCK_K held at 32, torch.equal-gated vs the carried config; 53 candidates; carried [128, 128, 32, 4, 3] 0.093 ms -> [128, 128, 32, 4, 3] 0.093 ms (kept, gain +0.0 %)"
+ }
+}

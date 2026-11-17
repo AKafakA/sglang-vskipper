@@ -1,0 +1,8 @@
+{
+ "model-00001-of-00004.safetensors": "d8cf9c4d0dd972e1a2131bfe656235ee98221679711a3beef6d46dadf0f20b5c",
+ "model-00002-of-00004.safetensors": "84c04f83cfd63bc5249d8b44afb2d48b5af47144b03cdade21d8e45f5d28d104",
+ "model-00003-of-00004.safetensors": "cc7fb4759d54227ef0b08ffdaba3ac1419654673ed1e0d0d2866fee193d1d79e",
+ "model-00004-of-00004.safetensors": "dbe4ac6250d0348143bc2c90db8758b1ab6b540aca59691a756704be0e080147",
+ "config.json": null,
+ "modeling_ddllama.py": null
+}

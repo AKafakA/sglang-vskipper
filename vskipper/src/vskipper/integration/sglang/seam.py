@@ -11,6 +11,7 @@ lm-level take the ForCausalLM wrapper.
 import os
 from functools import lru_cache
 from vskipper.runtime.design import (  # [D-609] design/host paths are code
+    active_arm,
     active_arm_name,
     design_attestation,
     flexidepth_weights_path,
@@ -158,36 +159,65 @@ def init_fd_layer(layer, config, layer_id, routed_lo, routed_hi, qk_head_norms):
     layer.fd_proj = None
     # [D-609] weights path from the committed host config, gated on the active arm
     _fdw = flexidepth_weights_path() if skipper_deployed() else ""
-    if _fdw and routed_lo <= layer_id <= routed_hi:
+    # An arm that declares its routed layers routes only those (the routed-layer scaling of the per-step cost).
+    _arm = active_arm() if _fdw else {}
+    # D³ has no checkpoint: its declared layers carry zeroed modules, and its branch weight of 1.0 keeps them out of every output.
+    _empty_modules = bool(_arm.get("d3_empty_modules"))
+    if (
+        layer_id in _arm["routed_layers"]
+        if _empty_modules
+        else _fdw and routed_lo <= layer_id <= routed_hi and layer_id in _arm.get("routed_layers", (layer_id,))
+    ):
         from vskipper.runtime.routing import (
             FDProj,
             FDRouter,
         )
 
-        _sd = _load_fd_weights(_fdw)
+        _sd = None if _empty_modules else _load_fd_weights(_fdw)
         _fd_reduction = getattr(config, "router_reduction_factor", 16)
         layer.fd_router = FDRouter(
             config.hidden_size,
             reduction=_fd_reduction,
             eps=config.rms_norm_eps,
         )
+        # Tensor parallelism shards the projector like an MoE expert: each rank keeps its slice
+        # of the bottleneck (gate/down rows, up columns), the same split SGLang gives the MLP's
+        # intermediate dimension, so the routed MLP's partial sums reduce once across ranks.
+        from sglang.srt.distributed import (
+            get_tensor_model_parallel_rank,
+            get_tensor_model_parallel_world_size,
+        )
+
+        _tp_size = get_tensor_model_parallel_world_size()
+        _tp_rank = get_tensor_model_parallel_rank()
+        _proj_reduction = getattr(config, "proj_reduction_factor", _fd_reduction)
+        _bottleneck = config.intermediate_size // _proj_reduction
+        if _bottleneck % _tp_size or config.intermediate_size % _tp_size:
+            raise ValueError(
+                f"FlexiDepth projector bottleneck {_bottleneck} does not split over TP={_tp_size}"
+            )
+        _local = slice(_tp_rank * (_bottleneck // _tp_size), (_tp_rank + 1) * (_bottleneck // _tp_size))
         layer.fd_proj = FDProj(
             config.hidden_size,
-            config.intermediate_size,
-            reduction=getattr(config, "proj_reduction_factor", _fd_reduction),
+            config.intermediate_size // _tp_size,
+            reduction=_proj_reduction,
             act=config.hidden_act,
         )
-        layer.fd_router.load_state_dict({
-            "router_enc.weight": _sd[f"model.layers.{layer_id}.router.router_enc.weight"],
-            "router_norm.weight": _sd[f"model.layers.{layer_id}.router.router_norm.weight"],
-            "router_dec.weight": _sd[f"model.layers.{layer_id}.router.router_dec.weight"],
-            "router_head.weight": _sd[f"model.layers.{layer_id}.router.router_head.weight"],
-        })
-        layer.fd_proj.load_state_dict({
-            "gate_proj.weight": _sd[f"model.layers.{layer_id}.router_proj.gate_proj.weight"],
-            "down_proj.weight": _sd[f"model.layers.{layer_id}.router_proj.down_proj.weight"],
-            "up_proj.weight": _sd[f"model.layers.{layer_id}.router_proj.up_proj.weight"],
-        })
+        if _empty_modules:
+            for _param in (*layer.fd_router.parameters(), *layer.fd_proj.parameters()):
+                _param.data.zero_()
+        else:
+            layer.fd_router.load_state_dict({
+                "router_enc.weight": _sd[f"model.layers.{layer_id}.router.router_enc.weight"],
+                "router_norm.weight": _sd[f"model.layers.{layer_id}.router.router_norm.weight"],
+                "router_dec.weight": _sd[f"model.layers.{layer_id}.router.router_dec.weight"],
+                "router_head.weight": _sd[f"model.layers.{layer_id}.router.router_head.weight"],
+            })
+            layer.fd_proj.load_state_dict({
+                "gate_proj.weight": _sd[f"model.layers.{layer_id}.router_proj.gate_proj.weight"][_local],
+                "down_proj.weight": _sd[f"model.layers.{layer_id}.router_proj.down_proj.weight"][_local],
+                "up_proj.weight": _sd[f"model.layers.{layer_id}.router_proj.up_proj.weight"][:, _local],
+            })
         # Inference-only: the router/projector are frozen published weights,
         # never trained here. Left as leaves that require grad they make the
         # capture path's in-place buffer copies illegal ("a leaf Variable
@@ -559,6 +589,7 @@ def validate_vp_causal_lm(lm, quant_config):
         if getattr(layer, "fd_router", None) is not None
     ]
     routed_layers = list(lm.model._fd_full_graph_route_layer_order)
+    from sglang.srt.model_executor.cuda_graph_config import check_cuda_graph_backend
     from sglang.srt.server_args import get_global_server_args
 
     validate_full_graph_model_configuration(
@@ -567,7 +598,11 @@ def validate_vp_causal_lm(lm, quant_config):
         tp_size=get_parallel().tp_size,
         pp_size=lm.pp_group.world_size,
         quant_config=quant_config,
-        cuda_graph_enabled=not get_global_server_args().disable_cuda_graph,
+        # the eager control disables decode graphs only: its routed body runs in decode
+        cuda_graph_enabled=not (
+            get_global_server_args().disable_cuda_graph
+            or check_cuda_graph_backend("decode", "disabled")
+        ),
     )
 
 

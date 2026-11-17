@@ -62,6 +62,7 @@ def effective(info: dict) -> dict:
         "dtype": info.get("dtype"),
         "attention_backend": info.get("attention_backend"),
         "sampling_backend": info.get("sampling_backend"),
+        "tp_size": info.get("tp_size"),
         "decode_kv_band": [rs.get("exit_kv_tokens"), rs.get("enter_kv_tokens")] if rs else None,
         # a fork arm served with the mode switch OFF (always-route, the fixed-plan knee legs: design.ARMS regime_switch False)
         # attests vp_runtime.regime_switch = {"enabled": false, "counters": ...} with no decode block: it executes no band, so
@@ -73,18 +74,33 @@ def effective(info: dict) -> dict:
     }
 
 
-def rule_band(device_name: str, device_memory_mib: int, routed_layers: list, skip_ratio: float) -> tuple:
-    """The band the tree's own rule gives for this device and these arm inputs (no GPU needed)."""
+def arm_rule_fields(arm: str) -> dict:
+    """What an arm declares for the rule on a model other than Llama-3-8B (D³ on Llama-2): its K/V bytes and its band's grid."""
+    tree = Path(__file__).resolve().parents[5]
+    sys.path.insert(0, str(tree / "python"))
+    try:
+        from vskipper.runtime.design import ARMS
+    finally:
+        sys.path.remove(str(tree / "python"))
+    return {k: v for k, v in ARMS.get(arm, {}).items() if k in ("kv_bytes_per_token_layer", "kv_band_round_tokens")}
+
+
+def rule_band(device_name: str, device_memory_mib: int, routed_layers: list, skip_ratio: float, tp_size: int = 1, fields: dict | None = None) -> tuple:
+    """The band the tree's own rule gives for this device and these arm inputs (no GPU needed); under TP each GPU
+    holds 1/tp of every token's K/V bytes (roofline.arm_kv_rule_inputs)."""
     tree = Path(__file__).resolve().parents[5]
     sys.path.insert(0, str(tree / "python"))
     try:
         from vskipper.kernels.kernel import canonical_device_key
-        from vskipper.runtime.roofline import DECODE_BODY_TAX_MS, band_device_key, derived_kv_band
+        from vskipper.runtime.roofline import (DECODE_BODY_TAX_MS, LLAMA3_8B_KV_BYTES_PER_TOKEN_LAYER, band_device_key,
+                                               derived_kv_band)
     finally:
         sys.path.remove(str(tree / "python"))
     key = band_device_key(canonical_device_key(device_name), int(device_memory_mib) * 1024 * 1024)
     n = len(routed_layers)
-    return key, derived_kv_band(key, routed_layers=n, skip_ratio=float(skip_ratio), tau_ms=DECODE_BODY_TAX_MS * n / 16.0)
+    return key, derived_kv_band(key, routed_layers=n, skip_ratio=float(skip_ratio), tau_ms=DECODE_BODY_TAX_MS * n / 16.0,
+                                kv_bytes_per_token_layer=int((fields or {}).get("kv_bytes_per_token_layer", LLAMA3_8B_KV_BYTES_PER_TOKEN_LAYER)) // int(tp_size or 1),
+                                **{k: v for k, v in (fields or {}).items() if k == "kv_band_round_tokens"})
 
 
 def main() -> int:
@@ -112,6 +128,9 @@ def main() -> int:
         eff[arm] = effective(info); eff[arm]["snapshot"] = snap.name
         eff[arm]["is_fork"] = bool(dig(info, "internal_states", 0, "vp_runtime"))
     base = arms[0]
+    for e in eff.values():
+        if e["decode_graph_backend"] == "disabled":      # a launch with decode graphs off still prints its configured list: no decode graph runs
+            e["decode_ladder_top"], e["decode_ladder_bs"], e["decode_ladder_buckets"] = None, [], 0
     print(f"execution differences vs {base} ({eff[base]['snapshot']}):")
     undeclared = []
     for arm in arms:
@@ -127,7 +146,8 @@ def main() -> int:
             v, vb = e.get(field), eff[base].get(field)
             expected = d.get(field)
             if field == "decode_ladder_top":
-                if expected is None or v != expected:
+                # an explicit null declares "no decode ladder" (a P/D prefill instance never decodes); absent = undeclared
+                if field not in d or v != expected:
                     undeclared.append(f"{arm}: {field}={v} (declared {expected})")
             elif field == "kv_capacity_tokens":
                 if v is None or vb is None:
@@ -161,6 +181,14 @@ def main() -> int:
                     if expected != "shared":
                         undeclared.append(f"{arm}: {field} served as a declared deviation (policy shared, band {v}) but the declaration says {expected!r}")
                     continue
+                if e["decode_kv_band_policy"] == "pd_tuned":
+                    # a declared P/D deviation passes only when the declaration names the exact served band
+                    want = expected.get("pd_tuned") if isinstance(expected, dict) else None
+                    if want is None or list(v or []) != list(want):
+                        undeclared.append(f"{arm}: {field}={v} served under policy pd_tuned but the declaration says {expected!r}")
+                    else:
+                        print(f"  {arm:16s} decode K/V band {v} == declared pd_tuned band")
+                    continue
                 if not e["mode_switch_executed"]:
                     # [2026-09-22 takeover] the band check was written for switching arms; a fork arm whose attestation carries
                     # no mode switch executes no band (always-route and the knee legs route every eligible pass by design). Every
@@ -171,11 +199,11 @@ def main() -> int:
                     undeclared.append(f"{arm}: {field} must be declared 'rule' for a fork arm (declared {expected!r})"); continue
                 if not v or e["routed_layers"] is None or e["design_skip_ratio"] is None:
                     undeclared.append(f"{arm}: {field} unreadable from the attestation (band {v}, layers {e['routed_layers']}, s {e['design_skip_ratio']})"); continue
-                key, want = rule_band(a.device_name, a.device_memory_mib, e["routed_layers"], e["design_skip_ratio"])
+                key, want = rule_band(a.device_name, a.device_memory_mib, e["routed_layers"], e["design_skip_ratio"], e["tp_size"], arm_rule_fields(arm))
                 if tuple(v) != tuple(want):
-                    undeclared.append(f"{arm}: {field}={v} but the rule gives {list(want)} for {key} (s={e['design_skip_ratio']}, {len(e['routed_layers'])} routed layers)")
+                    undeclared.append(f"{arm}: {field}={v} but the rule gives {list(want)} for {key} (s={e['design_skip_ratio']}, {len(e['routed_layers'])} routed layers, tp {e['tp_size']})")
                 else:
-                    print(f"  {arm:16s} decode K/V band {v} == rule for {key} (s={e['design_skip_ratio']}, {len(e['routed_layers'])} routed layers)")
+                    print(f"  {arm:16s} decode K/V band {v} == rule for {key} (s={e['design_skip_ratio']}, {len(e['routed_layers'])} routed layers, tp {e['tp_size']})")
             else:
                 if v != vb and expected is None:
                     undeclared.append(f"{arm}: {field}={v!r} vs {base} {vb!r} (undeclared)")

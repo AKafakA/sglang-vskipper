@@ -111,12 +111,15 @@ def resolve_exemptions(exemptions: dict[str, dict[str, Any]], active: str) -> di
 
     Two rule forms: {"value": v, "profile": p?} applies under p (or everywhere when p is absent);
     {"profiles": {p1: v1, p2: v2}} applies under p1 with v1, under p2 with v2, and NOT under any
-    other profile (D-773: fp16 under "paper", bf16 under "paper_bf16", the default elsewhere)."""
+    other profile (D-773: fp16 under "paper", bf16 under "paper_bf16", the default elsewhere). A profile's
+    value may itself be {"accept_if": {...}} for a structured field (cuda_graph_config under a TP profile)."""
     out: dict[str, dict[str, Any]] = {}
     for field, rule in exemptions.items():
         if "profiles" in rule:
             if active in rule["profiles"]:
-                out[field] = {k: v for k, v in rule.items() if k != "profiles"} | {"value": rule["profiles"][active], "profile": active}
+                value = rule["profiles"][active]
+                base = {k: v for k, v in rule.items() if k != "profiles"} | {"profile": active}
+                out[field] = base | (value if isinstance(value, dict) and "accept_if" in value else {"value": value})
         elif rule.get("profile") in (None, active):
             out[field] = rule
     return out

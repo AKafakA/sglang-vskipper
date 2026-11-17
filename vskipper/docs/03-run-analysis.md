@@ -1,8 +1,8 @@
 # Stage 3 — reproduce numerical outputs
 
 The reviewer pack contains frozen measurement summaries, preserved per-example
-quality records, the analysis code used by this recipe, and 120 reference
-outputs. Reproduction emits numerical tables/macros and data-driven plots.
+quality records, the analysis code used by this recipe, and 124 reference
+outputs (data pack v1.8). Reproduction emits numerical tables/macros and data-driven plots.
 The architecture illustration is a separate explanatory figure.
 
 ## Run the bundled source
@@ -15,8 +15,8 @@ bash /path/to/unpacked-pack/reproduce_results.sh /path/to/new-output
 ```
 
 The entrypoint verifies the package manifests, uses its bundled source and
-writes `generated/`, `figures/` and isolated scratch files. It checks all 120
-reference results: TeX files match byte-for-byte; JSON files match structurally
+writes `generated/`, `figures/` and isolated scratch files. It checks all 124
+reference results of data pack v1.8: TeX files match byte-for-byte; JSON files match structurally
 and numerically after normalizing the unpacked pack's absolute path.
 
 The pack contains reproduction materials only. The command requires no paper

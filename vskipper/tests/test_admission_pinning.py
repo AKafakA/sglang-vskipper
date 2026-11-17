@@ -811,3 +811,19 @@ def test_promote_then_demote_once() -> None:
     assert design.ARMS["vskipper_promote_demote"]["admission_overrides"] == {"decode_downgrade": "band_low_any"}
     assert design.SERVED_REGIME_SWITCH["admission"]["decode_downgrade"] == "none"
 
+
+
+def test_disaggregated_decode_instance_pins_from_its_own_band() -> None:
+    """[P/D] a decode instance decides the decode body from its band alone, which equals the integrated boundary
+    decision for either prefill body under the served design ("band"/"band"); any other boundary rule is refused."""
+    served = AdmissionPinner(_cfg(**{"admission.decode_after_stock_prefill": "band", "admission.decode_upgrade": "band_high"}))
+    assert served.decode_pin_disaggregated() == REQUEST_BODY_STOCK  # cold start / band LOW
+    assert served.decode_pin_disaggregated() == served.decode_pin_at_boundary(REQUEST_BODY_FD) == served.decode_pin_at_boundary(REQUEST_BODY_STOCK)
+    served.observe_decode_step(256, 262_144)  # band HIGH
+    assert served.decode_pin_disaggregated() == REQUEST_BODY_FD
+    assert served.decode_pin_at_boundary(REQUEST_BODY_FD) == served.decode_pin_at_boundary(REQUEST_BODY_STOCK) == REQUEST_BODY_FD
+    c = served.counters()
+    assert (c["disagg_decode_stock"], c["disagg_decode_fd"]) == (2, 1)
+    for rule in ({"admission.decode_after_stock_prefill": "stock"}, {"admission.decode_after_fd_prefill": "fd"}):
+        with pytest.raises(RuntimeError):
+            AdmissionPinner(_cfg(**{"admission.decode_after_stock_prefill": "band", **rule})).decode_pin_disaggregated()

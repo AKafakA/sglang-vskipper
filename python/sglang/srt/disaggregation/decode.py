@@ -1951,6 +1951,11 @@ class SchedulerDisaggregationDecodeMixin:
         if len(can_run_list) == 0:
             return None
 
+        # [vSkipper P/D] decide each arriving request's decode body before the batch is built
+        if self.vp_pinner.active:
+            for req in can_run_list:
+                self._vp_pin_decode_admission_disagg(req)
+
         set_time_batch(can_run_list, "set_forward_entry_time")
 
         # construct a schedule batch with those requests and mark as decode

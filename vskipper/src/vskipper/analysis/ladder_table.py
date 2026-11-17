@@ -17,8 +17,12 @@ usage: ladder_table.py gsm8k=<root> bbh_cot=<root> coqa=<root> --knee gsm8k=11 .
 """
 import argparse, pathlib, re, sys
 
-NAMES = {"gsm8k": "GSM8K", "bbh_cot": "BBH", "coqa": "CoQA", "h100_gsm8k": "GSM8K (H100)", "a6000_gsm8k": "GSM8K (RTX A6000)"}
-MW = {"gsm8k": "Gsm", "bbh_cot": "Bbh", "coqa": "Coqa", "h100_gsm8k": "HundredGsm", "a6000_gsm8k": "AsixGsm"}
+NAMES = {"gsm8k": "GSM8K", "bbh_cot": "BBH", "coqa": "CoQA", "h100_gsm8k": "GSM8K (H100)", "a6000_gsm8k": "GSM8K (RTX A6000)",
+         "tp2_gsm8k": "GSM8K (TP2)", "tp4_gsm8k": "GSM8K (TP4)", "pd_gsm8k": "GSM8K (2P1D)",
+         "pd1p1d_gsm8k": "GSM8K (1P1D)", "pd2p2d_gsm8k": "GSM8K (2P2D)"}
+MW = {"gsm8k": "Gsm", "bbh_cot": "Bbh", "coqa": "Coqa", "h100_gsm8k": "HundredGsm", "a6000_gsm8k": "AsixGsm",
+      "tp2_gsm8k": "TptwoGsm", "tp4_gsm8k": "TpfourGsm", "pd_gsm8k": "PdGsm",
+      "pd1p1d_gsm8k": "PdoneGsm", "pd2p2d_gsm8k": "PdtwoGsm"}
 TPS = re.compile(r"Output token throughput \(tok/s\):\s*([0-9.]+)")
 
 

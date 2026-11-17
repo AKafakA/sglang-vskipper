@@ -1037,7 +1037,7 @@ def _run_cell(
         sys.executable,
         str(ROOT / "vskipper/src/vskipper/experiments/sample_sglang_load.py"),
         "--base-url",
-        f"http://{args.host}:{args.port}",
+        f"http://{args.host}:{args.server_port}",
         "--output",
         str(load_file),
         "--interval-ms",
@@ -1084,8 +1084,18 @@ def _run_cell(
         return command_record
 
     server_info_before = _validate_live_deployment(
-        args.host, args.port, args.deployment
+        args.host, args.server_port, args.deployment
     )
+    for index, prefill_port in enumerate(args.prefill_server_port):
+        _write_json(
+            args.output_dir / f"{label}.prefill{index or ''}_server_info.before.json",
+            _fetch_json(f"http://{args.host}:{prefill_port}/server_info"),
+        )
+    for index, decode_port in enumerate(args.decode_server_port, start=1):
+        _write_json(
+            args.output_dir / f"{label}.decode{index}_server_info.before.json",
+            _fetch_json(f"http://{args.host}:{decode_port}/server_info"),
+        )
     _write_json(server_info_before_file, server_info_before)
     routes_decode = _arm_routes_decode(
         server_info_before, upstream_baseline=args.upstream_baseline
@@ -1113,8 +1123,18 @@ def _run_cell(
     ended = time.time()
     _write_json(
         server_info_after_file,
-        _fetch_json(f"http://{args.host}:{args.port}/server_info"),
+        _fetch_json(f"http://{args.host}:{args.server_port}/server_info"),
     )
+    for index, prefill_port in enumerate(args.prefill_server_port):
+        _write_json(
+            args.output_dir / f"{label}.prefill{index or ''}_server_info.after.json",
+            _fetch_json(f"http://{args.host}:{prefill_port}/server_info"),
+        )
+    for index, decode_port in enumerate(args.decode_server_port, start=1):
+        _write_json(
+            args.output_dir / f"{label}.decode{index}_server_info.after.json",
+            _fetch_json(f"http://{args.host}:{decode_port}/server_info"),
+        )
     audit_command = [
         sys.executable,
         str(ROOT / "vskipper/src/vskipper/experiments/validate_qps_artifact.py"),
@@ -1245,6 +1265,15 @@ def main() -> None:
     )
     parser.add_argument("--host", default="")
     parser.add_argument("--port", type=int)
+    # P/D disaggregation: --port is the router the client drives; --server-port is the DECODE
+    # instance (the deployment identity, the per-cell server_info pair and its gates, the load
+    # sampler), --prefill-server-port a prefill instance (repeat it for several: 2P1D), whose server_info pair is
+    # recorded beside each cell (the first as prefill_server_info, the k-th as prefill<k>_server_info), and
+    # --decode-server-port a further decode instance (2P2D; the k-th as decode<k>_server_info). Without P/D
+    # both default to --port.
+    parser.add_argument("--server-port", type=int, default=None)
+    parser.add_argument("--prefill-server-port", type=int, action="append", default=[])
+    parser.add_argument("--decode-server-port", type=int, action="append", default=[])
     parser.add_argument(
         "--backend",
         choices=("sglang-native",),
@@ -1529,6 +1558,7 @@ def main() -> None:
         raise ValueError("deployment endpoint must contain host and port")
     args.host = args.host or str(endpoint["host"])
     args.port = args.port or int(endpoint["port"])
+    args.server_port = args.server_port or args.port
     args.model = args.model or str(deployment["model"])
     if args.model != deployment["model"]:
         raise ValueError(
@@ -1606,6 +1636,10 @@ def main() -> None:
         "contract_lane": args.contract_lane or args.performance_phase,
         "model": args.model,
         "endpoint": {"host": args.host, "port": args.port},
+        "server_port": args.server_port,
+        "prefill_server_port": (args.prefill_server_port[0] if len(args.prefill_server_port) == 1
+                                else args.prefill_server_port or None),
+        "decode_server_port": args.decode_server_port or None,
         "deployment_manifest_path": str(deployment_path),
         "deployment_manifest_sha256": deployment_sha256,
         "deployment": deployment,
@@ -1678,7 +1712,9 @@ def main() -> None:
 
     suite_started = time.monotonic()
     _wait_ready(args.host, args.port, args.ready_timeout_s)
-    server_info = _validate_live_deployment(args.host, args.port, deployment)
+    if args.server_port != args.port:
+        _wait_ready(args.host, args.server_port, args.ready_timeout_s)
+    server_info = _validate_live_deployment(args.host, args.server_port, deployment)
     _write_json(args.output_dir / "server_info.before.json", server_info)
     rejected_cells = []
     try:
@@ -1721,7 +1757,7 @@ def main() -> None:
         run_manifest["status"] = "failed"
         run_manifest["error"] = f"{type(error).__name__}: {error}"
         try:
-            server_info = _validate_live_deployment(args.host, args.port, deployment)
+            server_info = _validate_live_deployment(args.host, args.server_port, deployment)
             _write_json(args.output_dir / "server_info.after.json", server_info)
         except Exception as capture_error:
             run_manifest["server_info_after_error"] = (
@@ -1729,7 +1765,7 @@ def main() -> None:
             )
         _write_json(run_manifest_path, run_manifest)
         raise
-    server_info = _validate_live_deployment(args.host, args.port, deployment)
+    server_info = _validate_live_deployment(args.host, args.server_port, deployment)
     _write_json(args.output_dir / "server_info.after.json", server_info)
     if rejected_cells:
         run_manifest["failed_unix_s"] = time.time()

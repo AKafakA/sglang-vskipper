@@ -2,9 +2,12 @@
 """Throughput under saturation at 1.25xQ* (Table 4): output tokens (TPS) and completed requests (RPS) per second inside the
 injection window (first arrival -> last arrival), which both arms share; the drain is excluded.
 
-  capacity_window.py extract <raw-root> <compact.json>   # per cell: token-emission counts in 50 ms bins,
+  capacity_window.py extract <raw-root> <compact.json> [ROWSET]   # per cell: token-emission counts in 50 ms bins,
                                                           # request start and end offsets (read from cells/<cell>.jsonl)
   capacity_window.py emit <compact.json> <generated-dir> # capacity_rows.tex, capacity_macros.tex, capacity.json
+ROWSET `paper` (default) is the paper's Table 4; `tp` the TP2 / TP4 cells and `pd` the 2P1D cells of the distributed
+extension (own raw roots),
+whose files carry a `_tp` suffix (capacity_tp.json, ...) so they never overwrite the paper's.
 
 A cell whose rebuilt token times do not cover every output token is refused. A row is refused unless every repetition of both
 arms completes fewer requests than arrive inside the window.
@@ -23,6 +26,17 @@ ROWS = [
     ("llama_h100_gsm8k", "Hundred", "h100v18_gsm8k", "upstream_g1024", "vskipper", "r17p5"),
     ("llama_a6000_gsm8k", "Asix", "a6000v18g256_gsm8k", "upstream_g256", "vskipper", "r7p5"),
 ]
+# Distributed extension (rebuttal, owner 2026-10-25: the RPS column of the TP table): GSM8K at TP2 / TP4 on the
+# A100-SXM4-40GB node, same-ladder baselines, 1.25 x Q* = 23.75 (Q* 19) and 45 (Q* 36) req/s
+TP_ROWS = [
+    ("tp2_a100_40_gsm8k", "TpTwo", "tp2_gsm8k", "upstream_g512", "vskipper_tp2", "r23p75"),
+    ("tp4_a100_40_gsm8k", "TpFour", "tp4_gsm8k", "upstream_g1024", "vskipper_tp4", "r45"),
+]
+# P/D (owner 2026-10-25: 2P1D, prefill TP1 on two GPUs + decode TP2), 1.25 x Q* = 30 req/s (Q* 24 on the upstream P/D group)
+PD_ROWS = [
+    ("pd2p1d_a100_40_gsm8k", "PdTwoPOneD", "pd_gsm8k", "upstream_pd_g512", "vskipper_pd", "r30"),
+]
+ROWSETS = {"paper": ROWS, "tp": TP_ROWS, "pd": PD_ROWS}
 
 
 def _cell(raw, root, rep, arm, rate):
@@ -52,9 +66,9 @@ def _cell(raw, root, rep, arm, rate):
             "ends": res["request_end_offsets_s"], "token_bins": sorted(bins.items())}
 
 
-def extract(raw, out):
-    data = {"bin_s": BIN, "rows": {}}
-    for key, _, root, up_arm, vs_arm, rate in ROWS:
+def extract(raw, out, rowset="paper"):
+    data = {"bin_s": BIN, "rowset": rowset, "rows": {}}
+    for key, _, root, up_arm, vs_arm, rate in ROWSETS[rowset]:
         reps = sorted(os.path.basename(p) for p in glob.glob(f"{raw}/{root}/rep*"))
         data["rows"][key] = [{"rep": r, "upstream": _cell(raw, root, r, up_arm, rate),
                               "vskipper": _cell(raw, root, r, vs_arm, rate)} for r in reps]
@@ -77,6 +91,9 @@ def _ci(xs):
 def emit(compact, gen):
     data = json.load(open(compact))
     binw, summary, macros, cols, ratios = data["bin_s"], {}, [], {}, []
+    rowset = data.get("rowset", "paper")
+    sfx, msfx = ("", "") if rowset == "paper" else (f"_{rowset}", rowset.title())
+    ROWS = ROWSETS[rowset]
     for key, stem, *_ in ROWS:
         rps, tps = [], []
         for r in data["rows"][key]:
@@ -97,14 +114,14 @@ def emit(compact, gen):
         macros += [f"\\newcommand{{\\vpCap{stem}Rps}}{{{mr:+.1f}}}", f"\\newcommand{{\\vpCap{stem}RpsCi}}{{{hr:.1f}}}",
                    f"\\newcommand{{\\vpCap{stem}RpsAbs}}{{{abs(mr):.1f}}}",
                    f"\\newcommand{{\\vpCap{stem}Tps}}{{{mt:+.1f}}}", f"\\newcommand{{\\vpCap{stem}TpsCi}}{{{ht:.1f}}}"]
-    macros += [f"\\newcommand{{\\vpCapDoneArrivedMin}}{{{min(ratios):.2f}}}",
-               f"\\newcommand{{\\vpCapDoneArrivedMax}}{{{max(ratios):.2f}}}"]
+    macros += [f"\\newcommand{{\\vpCapDoneArrivedMin{msfx}}}{{{min(ratios):.2f}}}",
+               f"\\newcommand{{\\vpCapDoneArrivedMax{msfx}}}{{{max(ratios):.2f}}}"]
     order = [k for k, *_ in ROWS]
     rows = ["TPS & " + " & ".join(cols[k][1] for k in order) + " \\\\",
             "RPS & " + " & ".join(cols[k][0] for k in order) + " \\\\"]
-    open(os.path.join(gen, "capacity_rows.tex"), "w").write("\n".join(rows) + "\n")
-    open(os.path.join(gen, "capacity_macros.tex"), "w").write("\n".join(macros) + "\n")
-    json.dump(summary, open(os.path.join(gen, "capacity.json"), "w"), indent=1)
+    open(os.path.join(gen, f"capacity{sfx}_rows.tex"), "w").write("\n".join(rows) + "\n")
+    open(os.path.join(gen, f"capacity{sfx}_macros.tex"), "w").write("\n".join(macros) + "\n")
+    json.dump(summary, open(os.path.join(gen, f"capacity{sfx}.json"), "w"), indent=1)
 
 
 if __name__ == "__main__":

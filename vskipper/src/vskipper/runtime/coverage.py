@@ -14,7 +14,7 @@ measured from the decode runner, which is the coverage oracle by construction.""
 from __future__ import annotations
 
 from vskipper.runtime.design import (  # [D-609]
-    SERVED_EXECUTION_MODE, skipper_deployed,
+    arm_coverage_dense, arm_execution_mode, skipper_deployed,
 )
 
 import contextlib
@@ -108,10 +108,16 @@ def record_eager_skip_decode_layer_call(forward_batch: Any) -> None:
     if _serving_decode_layer_call(forward_batch):
         _c3_counters.eager_skip_decode_layer_calls += 1
 _c3_counters = CoverageDenseCounters.create()
+_arm_coverage_dense_cache: Optional[bool] = None
 def coverage_dense_enabled() -> bool:
-    """The ``SGLANG_VP_COVERAGE_DENSE`` kill switch (default ON, strict parse)."""
+    """The ``SGLANG_VP_COVERAGE_DENSE`` kill switch (default ON, strict parse), AND the arm's own
+    ``coverage_dense`` field (design.py): the cohorts-without-graphs control serves with the stamp off.
+    The arm is boot-constant, so it is read once per process (this runs on every decode pass)."""
 
-    return envs.SGLANG_VP_COVERAGE_DENSE.get()
+    global _arm_coverage_dense_cache
+    if _arm_coverage_dense_cache is None:
+        _arm_coverage_dense_cache = arm_coverage_dense()
+    return envs.SGLANG_VP_COVERAGE_DENSE.get() and _arm_coverage_dense_cache
 def fd_skip_decode_deployed() -> bool:
     """Cached "FD weights loaded AND full_graph execution mode" predicate.
 
@@ -125,7 +131,7 @@ def fd_skip_decode_deployed() -> bool:
     if _fd_skip_decode_deployed_cache is None:
         # [D-609] arm + design, not environment
         _fd_skip_decode_deployed_cache = bool(
-            skipper_deployed() and SERVED_EXECUTION_MODE == "full_graph"
+            skipper_deployed() and arm_execution_mode() == "full_graph"
         )
     return _fd_skip_decode_deployed_cache
 def coverage_dense_armed() -> bool:
@@ -230,10 +236,11 @@ def reset_coverage_dense_state() -> None:
     """Reset all module state (CPU tests only; serving never resets)."""
 
     global _c3_counters, _graph_lifecycle_depth
-    global _fd_skip_decode_deployed_cache
+    global _fd_skip_decode_deployed_cache, _arm_coverage_dense_cache
     _c3_counters = CoverageDenseCounters.create()
     _graph_lifecycle_depth = 0
     _fd_skip_decode_deployed_cache = None
+    _arm_coverage_dense_cache = None
 
 def coverage_parity_ok(counters: Optional[CoverageDenseCounters] = None) -> bool:
     """Two-site parity gate: decisions==passes and rows==rows (SS5)."""

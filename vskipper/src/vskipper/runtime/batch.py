@@ -222,8 +222,14 @@ def prepare_full_graph_batch(
             policy_request_slots = _route_tape_request_slots(
                 forward_batch, policy_row_ids
             )
+    policy_extra = (
+        {"prompt_lens": forward_batch.fd_full_graph_prompt_lens}
+        if forward_batch.fd_full_graph_skipper_adapter.requires_prompt_lens
+        else {}
+    )
     forward_batch.fd_full_graph_skipper_state = (
         forward_batch.fd_full_graph_skipper_adapter.prepare_batch(
+            **policy_extra,
             hidden_states=hidden_states,
             request_ids=policy_request_ids,
             request_slots=policy_request_slots,
@@ -569,6 +575,7 @@ _VP_SPLIT_ROW_TENSORS = (
     "orig_seq_lens",
     "rids_int",
     "bootstrap_room_ids_int",
+    "fd_full_graph_prompt_lens",
 )
 _VP_SPLIT_ROW_LISTS = (
     "lora_ids",

@@ -197,10 +197,73 @@ SERVED_LAUNCH_EXEMPTIONS: Final[dict[str, dict[str, Any]]] = {
     # would make the boundary test a test on a crippled substrate. Llama-3-8B stays fp16
     # (D-757 add.). A "profiles" rule maps each profile to its declared value; under any
     # profile it does not name, the field is held to the default.
-    "dtype": {"profiles": {"paper": "float16", "paper_bf16": "bfloat16"},
+    "dtype": {"profiles": {"paper": "float16", "paper_bf16": "bfloat16", "paper_flashinfer": "float16",
+                           "paper_tp2": "float16", "paper_tp4": "float16",
+                           "paper_pd_prefill": "float16", "paper_pd_prefill_b": "float16", "paper_pd_prefill_tp2": "float16", "paper_pd_decode_tp2": "float16",
+                           "paper_pd_decode": "float16", "paper_pd_decode_g2": "float16", "paper_pd_decode_b": "float16"},
               "decision": "D-757 add. / D-773"},
-    "mem_fraction_static": {"profiles": {"paper": 0.8, "paper_bf16": 0.8},
+    "mem_fraction_static": {"profiles": {"paper": 0.8, "paper_bf16": 0.8, "paper_flashinfer": 0.8,
+                                         "paper_tp2": 0.8, "paper_tp4": 0.8,
+                                         "paper_pd_prefill": 0.8, "paper_pd_prefill_b": 0.8, "paper_pd_prefill_tp2": 0.8, "paper_pd_decode_tp2": 0.8,
+                                         "paper_pd_decode": 0.8, "paper_pd_decode_g2": 0.8, "paper_pd_decode_b": 0.8},
                             "decision": "D-757 add. / D-773"},
+    # Rebuttal TP feasibility (owner, 2026-10-24): both arms run the same tensor-parallel size.
+    "tp_size": {"profiles": {"paper_tp2": 2, "paper_tp4": 4, "paper_pd_prefill_tp2": 2, "paper_pd_decode_tp2": 2},
+                "decision": "rebuttal TP feasibility, owner 2026-10-24"},
+    # Rebuttal P/D feasibility (owner, 2026-10-24: 1 prefill instance at TP1 + 1 decode instance at TP2 on one
+    # node, both arms in the same layout). The instance role, the KV transfer engine and its bootstrap port, the GPU
+    # each instance starts at, and the prefill graphs on the prefill instance (the integrated server's default
+    # backend, which SGLang's P/D hook would otherwise switch off there) are the same for both arms.
+    "disaggregation_mode": {"profiles": {"paper_pd_prefill": "prefill", "paper_pd_prefill_b": "prefill", "paper_pd_prefill_tp2": "prefill",
+                                         "paper_pd_decode_tp2": "decode",
+                                         "paper_pd_decode": "decode", "paper_pd_decode_g2": "decode", "paper_pd_decode_b": "decode"},
+                            "decision": "rebuttal P/D feasibility, owner 2026-10-24"},
+    # mooncake over TCP on loopback (the spec's P/D environment sets SGLANG_HOST_IP=127.0.0.1): on this node's public interface
+    # its TCP sessions failed after ~1 min of load, its intra-node NVLink mode stalled, and NIXL hung at startup (2026-10-24)
+    "disaggregation_transfer_backend": {"profiles": {"paper_pd_prefill": "mooncake", "paper_pd_prefill_b": "mooncake", "paper_pd_prefill_tp2": "mooncake",
+                                                     "paper_pd_decode_tp2": "mooncake",
+                                                     "paper_pd_decode": "mooncake", "paper_pd_decode_g2": "mooncake", "paper_pd_decode_b": "mooncake"},
+                                        "decision": "rebuttal P/D feasibility, owner 2026-10-24"},
+    "disaggregation_bootstrap_port": {"profiles": {"paper_pd_prefill": 8998, "paper_pd_prefill_b": 8999, "paper_pd_prefill_tp2": 8998,
+                                                   "paper_pd_decode_tp2": 8998,
+                                                   "paper_pd_decode": 8998, "paper_pd_decode_g2": 8998, "paper_pd_decode_b": 8998},
+                                      "decision": "rebuttal P/D feasibility, owner 2026-10-24"},
+    # decode instance from GPU 2. Owner 2026-10-25: 2P1D, two TP1 prefill instances on GPUs 0 and 1 (paper_pd_prefill,
+    # paper_pd_prefill_b) feeding one TP2 decode instance; the TP1 -> TP2 KV transfer uses SGLang's staging buffer (the spec's
+    # P/D environment, both arms). paper_pd_prefill_tp2 is the earlier TP2 + TP2 layout (prefill on GPUs 0-1).
+    # Owner 2026-10-26: P/D with every instance at TP1 on the four-GPU A100-80GB node -- 1P1D (prefill GPU 0, decode GPU 1:
+    # paper_pd_decode) and 2P2D (prefill GPUs 0 and 1, decode GPUs 2 and 3: paper_pd_decode_g2, paper_pd_decode_b); TP1 -> TP1
+    # transfers take mooncake's plain path, so the staging buffer is not used.
+    "base_gpu_id": {"profiles": {"paper_pd_prefill": 0, "paper_pd_prefill_b": 1, "paper_pd_prefill_tp2": 0, "paper_pd_decode_tp2": 2,
+                                 "paper_pd_decode": 1, "paper_pd_decode_g2": 2, "paper_pd_decode_b": 3},
+                    "decision": "rebuttal P/D feasibility, owner 2026-10-24"},
+    "cuda_graph_backend_prefill": {"profiles": {"paper_pd_prefill": "breakable", "paper_pd_prefill_b": "breakable", "paper_pd_prefill_tp2": "breakable"},
+                                   "decision": "rebuttal P/D feasibility: prefill graphs on the prefill instance, both arms"},
+    # Consequence of --tp-size 4 on the 40 GB card: SGLang's own memory-derived decode graph range is 160 rows there
+    # (32 at TP1, the bare default this gate computes; 32 at TP2 as well). The served routed ladder (1,024) is attested in
+    # vp_runtime and held equal across arms by the execution-difference gate; this is upstream's resolved value at TP4.
+    "cuda_graph_config": {"profiles": {"paper_tp4": {"accept_if": {"decode.max_bs": 160, "decode.bs[max]": 160}},
+                                       "paper_pd_prefill": {"accept_if": {"decode.backend": "disabled",
+                                                                          "prefill.backend": "breakable"}},
+                                       "paper_pd_prefill_b": {"accept_if": {"decode.backend": "disabled",
+                                                                            "prefill.backend": "breakable"}},
+                                       "paper_pd_prefill_tp2": {"accept_if": {"decode.backend": "disabled",
+                                                                              "prefill.backend": "breakable"}}},
+                          "decision": "rebuttal TP feasibility: SGLang's TP4 default decode range on the 40 GB card; P/D: a "
+                                      "prefill instance never decodes (SGLang's P/D hook) and keeps breakable prefill graphs"},
+    # What SGLang's own P/D hook and defaults resolve from the declared role (server_args / pd_disaggregation_hook), both arms:
+    # a prefill instance switches CUDA graphs off (the prefill graphs are restored by cuda_graph_backend_prefill above) and
+    # balances by bootstrap room; a decode instance serves from a chunk cache and reserves its in-transfer slots.
+    "disable_cuda_graph": {"profiles": {"paper_pd_prefill": True, "paper_pd_prefill_b": True, "paper_pd_prefill_tp2": True},
+                           "decision": "rebuttal P/D feasibility: SGLang's P/D hook on the prefill instance"},
+    "load_balance_method": {"profiles": {"paper_pd_prefill": "follow_bootstrap_room", "paper_pd_prefill_b": "follow_bootstrap_room", "paper_pd_prefill_tp2": "follow_bootstrap_room"},
+                            "decision": "rebuttal P/D feasibility: SGLang's default on a prefill instance"},
+    "disable_radix_cache": {"profiles": {"paper_pd_decode_tp2": True, "paper_pd_decode": True, "paper_pd_decode_g2": True,
+                                         "paper_pd_decode_b": True},
+                            "decision": "rebuttal P/D feasibility: SGLang's P/D hook (decode instance: chunk cache)"},
+    "disaggregation_decode_extra_slots": {"profiles": {"paper_pd_decode_tp2": 0, "paper_pd_decode": 0, "paper_pd_decode_g2": 0,
+                                                       "paper_pd_decode_b": 0},
+                                          "decision": "rebuttal P/D feasibility: SGLang's P/D hook default for this pool"},
 }
 
 # A LAUNCH PROFILE is the set of launch arguments the driver passes beyond the substrate
@@ -213,9 +276,78 @@ SERVED_LAUNCH_EXEMPTIONS: Final[dict[str, dict[str, Any]]] = {
 SERVED_LAUNCH_PROFILES: Final[dict[str, dict[str, Any]]] = {
     "paper": {"dtype": "float16", "mem_fraction_static": 0.8},
     "paper_bf16": {"dtype": "bfloat16", "mem_fraction_static": 0.8},   # D-773: Qwen3-4B (native dtype)
+    "paper_tp2": {"dtype": "float16", "mem_fraction_static": 0.8, "tp_size": 2},   # TP feasibility
+    "paper_tp4": {"dtype": "float16", "mem_fraction_static": 0.8, "tp_size": 4},   # TP feasibility
+    # P/D feasibility: the two instances of one arm (prefill at TP1 from GPU 0, decode at TP2 from GPU 1)
+    "paper_pd_prefill": {"dtype": "float16", "mem_fraction_static": 0.8, "disaggregation_mode": "prefill",
+                         "disaggregation_transfer_backend": "mooncake", "disaggregation_bootstrap_port": 8998,
+                         "base_gpu_id": 0, "cuda_graph_backend_prefill": "breakable"},
+    # owner 2026-10-25: 2P1D = two TP1 prefill instances (GPU 0 and GPU 1, own bootstrap ports) + one TP2 decode instance (GPUs 2-3)
+    "paper_pd_prefill_b": {"dtype": "float16", "mem_fraction_static": 0.8, "disaggregation_mode": "prefill",
+                           "disaggregation_transfer_backend": "mooncake", "disaggregation_bootstrap_port": 8999,
+                           "base_gpu_id": 1, "cuda_graph_backend_prefill": "breakable"},
+    "paper_pd_prefill_tp2": {"dtype": "float16", "mem_fraction_static": 0.8, "tp_size": 2, "disaggregation_mode": "prefill",
+                             "disaggregation_transfer_backend": "mooncake", "disaggregation_bootstrap_port": 8998,
+                             "base_gpu_id": 0, "cuda_graph_backend_prefill": "breakable"},
+    "paper_pd_decode_tp2": {"dtype": "float16", "mem_fraction_static": 0.8, "tp_size": 2, "disaggregation_mode": "decode",
+                            "disaggregation_transfer_backend": "mooncake", "disaggregation_bootstrap_port": 8998,
+                            "base_gpu_id": 2},
+    # owner 2026-10-26: TP1 decode instances on the A100-80GB node (1P1D: GPU 1; 2P2D: GPUs 2 and 3)
+    "paper_pd_decode": {"dtype": "float16", "mem_fraction_static": 0.8, "disaggregation_mode": "decode",
+                       "disaggregation_transfer_backend": "mooncake", "disaggregation_bootstrap_port": 8998, "base_gpu_id": 1},
+    "paper_pd_decode_g2": {"dtype": "float16", "mem_fraction_static": 0.8, "disaggregation_mode": "decode",
+                          "disaggregation_transfer_backend": "mooncake", "disaggregation_bootstrap_port": 8998, "base_gpu_id": 2},
+    "paper_pd_decode_b": {"dtype": "float16", "mem_fraction_static": 0.8, "disaggregation_mode": "decode",
+                         "disaggregation_transfer_backend": "mooncake", "disaggregation_bootstrap_port": 8998, "base_gpu_id": 3},
+    #: [owner 2026-10-26, rebuttal: "if support flash attention is possible"] the paper protocol on SGLang's OWN attention
+    #: substrate (FlashInfer, the A100 default, and its default sampler) instead of the unified Triton one -- see
+    #: SERVED_ATTENTION_SUBSTRATE_BY_PROFILE. Both arms; the fork arm is vskipper_fi.
+    "paper_flashinfer": {"dtype": "float16", "mem_fraction_static": 0.8},
     "sglang_default": {},
 }
+
+# [owner 2026-10-27: the pd_tuned 1P1D beside the paper-setting one] lane b's prefill instance = paper_pd_prefill with its own bootstrap
+# port (8999): a second 1P1D group then runs under CUDA_VISIBLE_DEVICES 2,3 (device 0 = its prefill GPU, device 1 = its decode GPU via
+# paper_pd_decode) and never touches the first group's GPUs. (Seeing GPU 0 as its device 0, an earlier mapping put CUDA contexts on the
+# first group's prefill GPU and shrank that instance's K/V pool by 2.7k tokens.) Every exemption paper_pd_prefill carries applies.
+SERVED_LAUNCH_PROFILES["paper_pd_prefill_lb"] = {**SERVED_LAUNCH_PROFILES["paper_pd_prefill"], "disaggregation_bootstrap_port": 8999}
+for _field, _rule in SERVED_LAUNCH_EXEMPTIONS.items():
+    _profiles = _rule.get("profiles")
+    if isinstance(_profiles, dict) and "paper_pd_prefill" in _profiles:
+        _profiles["paper_pd_prefill_lb"] = 8999 if _field == "disaggregation_bootstrap_port" else _profiles["paper_pd_prefill"]
+del _field, _rule, _profiles
+#: Tensor-parallel sizes the routed runtime serves (FlexiDepth Llama; projector bottleneck 896
+#: and intermediate 14336 split evenly). The arm declares its size; the boot refuses a mismatch.
+SERVED_TP_SIZES: Final[tuple[int, ...]] = (1, 2, 4)
+# [owner 2026-11-06, reviewers qN7Z and TQAB] Control and variant profiles, each the paper profile plus one stock flag on BOTH arms.
+SERVED_LAUNCH_EXEMPTIONS["cuda_graph_backend_decode"] = {
+    "profiles": {"paper_nodecodegraph": "disabled"},
+    "decision": "execution control: no decode graphs on both arms",
+}
+SERVED_LAUNCH_EXEMPTIONS["cuda_graph_config"]["profiles"]["paper_nodecodegraph"] = {"accept_if": {"decode.backend": "disabled"}}
+SERVED_LAUNCH_EXEMPTIONS["cuda_graph_config"]["profiles"]["paper_chunk2048"] = {"accept_if": {"prefill.max_bs": 2048, "prefill.bs[max]": 2048}}
+SERVED_LAUNCH_EXEMPTIONS["cuda_graph_config"]["profiles"]["paper_chunk1024"] = {"accept_if": {"prefill.max_bs": 1024, "prefill.bs[max]": 1024}}
+SERVED_LAUNCH_EXEMPTIONS["chunked_prefill_size"] = {
+    "profiles": {"paper_chunk2048": 2048, "paper_chunk1024": 1024},
+    "decision": "chunked-prefill variant: the same chunk size on both arms",
+}
+for _name, _extra in (("paper_nodecodegraph", {"cuda_graph_backend_decode": "disabled"}),
+                      ("paper_chunk2048", {"chunked_prefill_size": 2048}),
+                      ("paper_chunk1024", {"chunked_prefill_size": 1024})):
+    SERVED_LAUNCH_PROFILES[_name] = {**SERVED_LAUNCH_PROFILES["paper"], **_extra}
+    for _field, _rule in SERVED_LAUNCH_EXEMPTIONS.items():
+        _profiles = _rule.get("profiles")
+        if isinstance(_profiles, dict) and "paper" in _profiles:
+            _profiles[_name] = _profiles["paper"]
+del _name, _extra, _field, _rule, _profiles
 SERVED_LAUNCH_PROFILE_DEFAULT: Final[str] = "paper"
+
+# The attention SUBSTRATE each launch profile runs on, both arms. "triton" is the unified substrate of every paper cell
+# (D-187: the driver passes --attention-backend/--prefill-attention-backend/--decode-attention-backend=triton and
+# SGLANG_IS_FLASHINFER_AVAILABLE=false, declared above as exemptions); "flashinfer" passes NO backend flag and leaves
+# FlashInfer available, so both arms resolve SGLang's own defaults on the card (FlashInfer attention + sampler on the A100),
+# which Gate E holds to the computed defaults. A profile not named here is "triton".
+SERVED_ATTENTION_SUBSTRATE_BY_PROFILE: Final[dict[str, str]] = {"paper_flashinfer": "flashinfer"}
 
 # ---------------------------------------------------------------------------
 # THE CANONICAL ARMS
@@ -320,6 +452,47 @@ ARMS: Final[dict[str, dict[str, Any]]] = {
 }
 # [owner 2026-09-12] Deprecated name of the served system; identical design object.
 ARMS["integrated_it4"] = ARMS["vskipper"]
+
+# [owner 2026-11-06, reviewer qN7Z] The three-step execution control: same checkpoint, same router, decode only, always-route, so the
+# steps differ only in how a routed decode layer executes. `integrated_denseprefix_fd` is the third step (packed cohorts in capture).
+# Full-width: the MLP and the projector run on every row inside the captured graph, selected by the route mask.
+ARMS["vskipper_ctrl_fullwidth"] = {
+    "skipper": "flexidepth",
+    "phases": "decode",
+    "regime_switch": False,
+    "low_row_policy": "native_dense",
+}
+# How the per-step cost scales with the number of routed layers (reviewer TQAB, Q1): the same decode-only arm on the last 8 and last 4 layers.
+ARMS["vskipper_ctrl_routed8"] = {**ARMS["integrated_denseprefix_fd"], "routed_layers": tuple(range(24, 32))}
+ARMS["vskipper_ctrl_routed4"] = {**ARMS["integrated_denseprefix_fd"], "routed_layers": tuple(range(28, 32))}
+# [owner 2026-11-06, reviewer qN7Z] The same control on the prefill path, where a batch carries thousands of tokens through the MLP:
+# always-route, packed cohorts or the full-width body. Both phases, because the full-width posture requires decode among them; the
+# measurement sends one output token, so only prefill runs.
+ARMS["vskipper_ctrl_prefill_cohort"] = {"skipper": "flexidepth", "phases": "both", "regime_switch": False}
+ARMS["vskipper_ctrl_prefill_fullwidth"] = {**ARMS["vskipper_ctrl_prefill_cohort"], "low_row_policy": "native_dense"}
+# [owner 2026-11-07] The served design with the full-width body in place of packed cohorts: the same question end to end, mode switch on.
+# The body also feeds the route counts the prefill engagement escape reads, so the mode switch behaves as on the served arm.
+ARMS["vskipper_fullwidth"] = {**ARMS["vskipper"], "low_row_policy": "native_dense", "fullwidth_engagement_counts": True}
+# [owner 2026-11-14, repetition fix] The served design with a post-trained router/projector file (the GRPO candidate): identical to
+# `vskipper` in every design field; only the weights key differs. The host file's `flexidepth_weights_cand_grpo` names the candidate
+# file the job staged, and the campaign records its sha256 at stage-in. The decode band is the released checkpoint's (inherited).
+ARMS["vskipper_cand_grpo"] = {**ARMS["vskipper"], "weights_key": "flexidepth_weights_cand_grpo"}
+# Simple skipping: vpipe/eager.py, no capture, no cohorts, a full attention read on every row, row gather per layer. Launch profile
+# paper_nodecodegraph, against upstream on the same profile.
+ARMS["vskipper_ctrl_eager"] = {
+    "skipper": "flexidepth",
+    "phases": "decode",
+    "regime_switch": False,
+    "execution_mode": "direct_eager",
+}
+
+# [owner 2026-11-09, reviewer qN7Z] Packed cohorts WITHOUT decode CUDA graphs: the captured cohort control
+# (`integrated_denseprefix_fd`: decode only, always-route) with the coverage stamp off, served only under profile
+# `paper_nodecodegraph` against `upstream_nograph`. With no captured decode graph every decode pass is uncovered,
+# and with the stamp off the full-graph cohort body runs on each of them uncaptured, the path uncovered passes
+# took before the coverage stamp existed. It isolates the graphs' share with the cohorts held fixed, as the
+# existing controls isolate the cohorts' share with the graphs held fixed.
+ARMS["vskipper_ctrl_cohort_nograph"] = {**ARMS["integrated_denseprefix_fd"], "coverage_dense": False}
 
 # [D-743] v1.4.5 mechanism ablation: the served design with compaction OFF (arm field; every
 # other field identical to `vskipper`). Never served in a headline cell.
@@ -459,6 +632,21 @@ ARMS["vskipper_pingate_lowband"] = {
     "decode_kv_band_policy": "gate",
 }
 
+# [rebuttal, owner 2026-10-27] P/D-tuned decode bands ("tuning based on the new pd split setup to make the decode rate also
+# triggered"; method A): the paper's A100 band keeps its position relative to the load, moved to the P/D decode instance -- band =
+# (160k, 200k) x (the decode instance's upstream resident-K/V estimate at 0.95 x Q* / the integrated instance's 412,165), on a 1k grid,
+# exit = 0.8 x enter (pd_tuned_band.py, measured on the paper's main A100 host). A DECLARED deviation from the roofline rule
+# (decode_kv_band_policy "pd_tuned", model_runner logs it, the execution-difference declaration names the exact band); served by
+# every instance of the treatment (G1 holds one served design per group; a prefill instance never reads the band). The paper-setting
+# P/D run keeps the rule's band (dense decode).
+PD_TUNED_BANDS: Final[dict[str, tuple[int, int]]] = {"1p1d": (12000, 15000), "2p2d": (10000, 13000)}
+for _layout, _band in PD_TUNED_BANDS.items():
+    ARMS[f"vskipper_pdtuned_{_layout}"] = {
+        **ARMS["vskipper"],
+        "decode_kv_band": {"NVIDIA_A100": _band},
+        "decode_kv_band_policy": "pd_tuned",
+    }
+
 # [D-830, 2026-09-16] The third model: FlexiDepth-Qwen3-8B, our alignment-only `ste_hard` checkpoint
 # (coef 2.5e-5; 4-GPU training campaign 2026-09-16, model of record = the last checkpoint that passed
 # the on-node quality gate, D-828). Same family port as Qwen3-4B (36 layers, routed 18..35, 8 K/V heads
@@ -577,6 +765,50 @@ def _mock_arm(rate: float, depth: float, **family: Any) -> dict[str, Any]:
     return arm
 
 
+# [owner 2026-11-06, reviewer DAyT] D³ (Fan et al., Findings of ACL 2025), a training-free skipper developed independently of
+# FlexiDepth, at its published BBH setting (alpha 0.99, start 0.6), no tuning. Decode only: the prompt runs full depth. s is the share
+# of the 16 routed decisions it drops: 11.93 layers per generated token over upstream's recorded BBH lengths at the knee. Layers
+# 16-18 stay RUN. The FlexiDepth checkpoint's base weights are the base model, its router and projector are unused here.
+def _d3_arm(**family: Any) -> dict[str, Any]:
+    arm: dict[str, Any] = {
+        "skipper": "position_decay",
+        "phases": "decode",
+        "regime_switch": True,
+        "d3_alpha": 0.99,
+        "d3_start_fraction": 0.6,
+        "d3_num_layers": 32,
+        "design_skip_ratio": 11.93 / 16,
+        **family,
+    }
+    arm["decode_kv_band"] = _rule_band(arm)
+    return arm
+
+
+ARMS["vskipper_d3_bbh"] = _d3_arm()
+ARMS["vskipper_d3_bbh_alwaysroute"] = {**_d3_arm(), "regime_switch": False}
+del ARMS["vskipper_d3_bbh_alwaysroute"]["decode_kv_band"]
+
+# [owner 2026-11-07, reviewer DAyT] D³ in vSkipper as its paper runs it: Llama-2-7B, no CoT, BBH alpha 0.9, start 0.6, GSM8K alpha 0.9999, start 0.2. Their Table 6
+# layer counts fix these values, with every row counted to its maximum length (19.17 layers at 200 tokens, 29.90 at 1,024). s is that share of the routed
+# decisions: 12.835 of 13 on BBH, 2.096 of 4 on GSM8K. The routed layers are exactly those the rule can drop. Llama-2 has 32 K/V heads and no FlexiDepth checkpoint.
+_D3_LLAMA2 = {"d3_empty_modules": True, "kv_bytes_per_token_layer": 2 * 32 * 128 * 2, "served_model_revision": "8efe6c9b93655b934e27bd9981e3ec13e55aee9d"}
+
+
+def _d3_pair(name: str, **family: Any) -> None:
+    ARMS[name] = _d3_arm(**family)
+    ARMS[f"{name}_alwaysroute"] = {**ARMS[name], "regime_switch": False}
+    del ARMS[f"{name}_alwaysroute"]["decode_kv_band"]
+
+
+_d3_pair("vskipper_d3_l2_bbh", d3_alpha=0.9, d3_start_fraction=0.6, routed_layers=tuple(range(19, 32)), design_skip_ratio=12.835 / 13,
+         kv_band_round_tokens=5000, **_D3_LLAMA2)
+_d3_pair("vskipper_d3_l2_gsm8k", d3_alpha=0.9999, d3_start_fraction=0.2, routed_layers=tuple(range(6, 10)), design_skip_ratio=2.096 / 4, **_D3_LLAMA2)
+
+# [owner 2026-11-07, reviewer DAyT] D³ retuned on Llama-3-8B on the same client: the most skip within the released FlexiDepth checkpoint's own quality loss. BBH alpha 0.9,
+# start 0.2 drops 25.21 of 26 routed layers at 200 tokens, GSM8K alpha 0.9999, start 0.8 drops 2.096 of 4 at 1,024. The routed layers are again those the rule can drop.
+_d3_pair("vskipper_d3_l3_bbh", d3_alpha=0.9, d3_start_fraction=0.2, routed_layers=tuple(range(6, 32)), design_skip_ratio=25.21 / 26, d3_empty_modules=True)
+_d3_pair("vskipper_d3_l3_gsm8k", d3_alpha=0.9999, d3_start_fraction=0.8, routed_layers=tuple(range(25, 29)), design_skip_ratio=2.096 / 4, d3_empty_modules=True)
+
 ARMS.update({
     f"integrated_randomskip_r{int(rate * 100)}_d{int(depth * 100)}": _mock_arm(rate, depth)
     for rate in _SWEEP_SKIP_RATES
@@ -628,6 +860,17 @@ ARMS.update({
     )
     for rate, depth in ((0.50, 0.75), (0.75, 0.75))
 })
+
+
+# [rebuttal TP feasibility, owner 2026-10-24] FlexiDepth Llama at tensor-parallel size 2 and 4:
+# the served design and always-route with `tp` declared. The served arm's thresholds follow the
+# rule with the per-GPU K/V bytes (b / tp), asserted at boot like every other arm.
+for _tp in (2, 4):
+    for _base in ("vskipper", "integrated_alwaysskip"):
+        _tp_arm = {**ARMS[_base], "tp": _tp}
+        if ARMS[_base]["regime_switch"]:
+            _tp_arm["decode_kv_band"] = _rule_band(_tp_arm)
+        ARMS[f"{_base}_tp{_tp}"] = _tp_arm
 
 
 def resolve_arm(name: str) -> dict[str, Any]:
@@ -692,13 +935,13 @@ def design_attestation() -> dict[str, Any]:
     return {
         "source": "vpipe/design.py (constants, D-609)",
         "regime_switch": SERVED_REGIME_SWITCH,
-        "low_row_policy": SERVED_LOW_ROW_POLICY,
+        "low_row_policy": arm_low_row_policy(),
         "routed_layers": list(arm_routed_layers()),
         # [plan v3] the rule input the execution-difference gate needs to recompute this arm's
         # band for the device it detects (FlexiDepth arms: the design ratio; mocks: rate x depth)
         "design_skip_ratio": float(active_arm().get("design_skip_ratio", _design_skip_ratio_default())),
         "layer_policy": SERVED_LAYER_POLICY,
-        "execution_mode": SERVED_EXECUTION_MODE,
+        "execution_mode": arm_execution_mode(),
         "compact_enabled": arm_compact_enabled(),
         "compact_phases": sorted(SERVED_COMPACT_PHASES),
         # [v1.5] The decode K/V band this arm DECLARES per device (the served value for the
@@ -764,7 +1007,7 @@ def moe_config_dir() -> str:
 
 
 def served_model_revision() -> str:
-    return _host().get("served_model_revision", "")
+    return active_arm().get("served_model_revision") or _host().get("served_model_revision", "")
 
 
 # ---------------------------------------------------------------------------
@@ -778,6 +1021,30 @@ def served_model_revision() -> str:
 # An unknown name raises. There is no "default that quietly applies", which is the
 # property that let a wrong configuration run for eighteen hours.
 _ACTIVE_ARM_FILE = "vskipper/configs/deploy/active_arm"
+# [owner 2026-10-26, rebuttal FlashInfer arm, option 1: "FlashInfer, prefill routing only"] The served design on SGLang's
+# FlashInfer substrate (launch profile paper_flashinfer). FlashInfer plans its decode work on the host once per batch, so it
+# cannot skip a device-chosen subset of rows per layer inside a captured graph: the row-gated decode attention that prices the
+# decode switch (roofline: a skipped row saves that layer's attention read of its context) exists only in the Triton kernel.
+# This arm therefore keeps the served PREFILL routing and the per-request admission pinning unchanged and decodes every request
+# on the dense body: an FD prefill decodes stock (``decode_after_fd_prefill: "stock"``, the fd->stock legal plan), a stock
+# prefill decodes stock, nothing is promoted. Decode is not a phase this arm routes (``phases: "prefill"``), so the decode
+# step runs SGLang's own full decode graph over the dense body -- the computation upstream's decode graph runs (the FD
+# conditional decode backend exists only for an arm that routes decode, and its stock low band asserts it); the coverage
+# ladder still captures to 4x max_bs = 1024 (skipper deployed). This admission block never reads the decode band
+# (RegimeSwitchAdmissionConfig.band_free), so it pins without a decode leg. Masked decode attention (the Triton row mask) is
+# off: no routed decode step ever runs. Never a headline arm.
+ARMS["vskipper_fi"] = {
+    **ARMS["vskipper"],
+    "phases": "prefill",
+    "masked_decode_attention": False,
+    "admission_overrides": {
+        "decode_after_fd_prefill": "stock",
+        "decode_after_stock_prefill": "stock",
+        "decode_upgrade": "none",
+    },
+}
+
+
 _ARM_CACHE: dict[str, str] = {}
 
 
@@ -843,10 +1110,37 @@ def arm_compact_enabled() -> bool:
     return bool(active_arm().get("compact", SERVED_COMPACT_ENABLED))
 
 
+def arm_masked_decode_attention() -> bool:
+    """Triton row-masked decode attention for the active arm (arm field ``masked_decode_attention``; default = the design)."""
+
+    return bool(active_arm().get("masked_decode_attention", SERVED_MASKED_DECODE_ATTENTION))
+
+
 def arm_routed_layers() -> tuple[int, ...]:
     """The routed-layer range the active arm's checkpoint trained (default = the design's)."""
 
     return tuple(int(i) for i in active_arm().get("routed_layers", SERVED_ROUTED_LAYERS))
+
+
+def arm_coverage_dense() -> bool:
+    """Whether the coverage stamp guards this arm's decode passes (arm field ``coverage_dense``, default True).
+
+    Only the cohorts-without-graphs control turns it off, so that its uncaptured decode passes run the routed
+    cohort body instead of the dense fall-through. Every other arm keeps the stamp."""
+
+    return bool(active_arm().get("coverage_dense", True))
+
+
+def arm_execution_mode() -> str:
+    """How the active arm executes a routed layer (arm field ``execution_mode``; default = the design's)."""
+
+    return str(active_arm().get("execution_mode", SERVED_EXECUTION_MODE))
+
+
+def arm_low_row_policy() -> str:
+    """The routed-MLP body of the active arm (arm field ``low_row_policy``; default = the design's)."""
+
+    return str(active_arm().get("low_row_policy", SERVED_LOW_ROW_POLICY))
 
 
 def mechanism(value: bool, *, decode_only: bool = False) -> bool:
@@ -866,6 +1160,8 @@ def mechanism(value: bool, *, decode_only: bool = False) -> bool:
 
     if not skipper_deployed():
         return False
+    if arm_execution_mode() != SERVED_EXECUTION_MODE:
+        return False   # the eager control arm runs none of the full-graph mechanisms
     if decode_only and "decode" not in arm_phases():
         return False
     return value
